@@ -4,7 +4,7 @@
  */
 import { closePools } from "../server/db/client";
 import { env } from "../server/env";
-import { log, runOnce, workerId } from "../server/jobs/runner";
+import { errorMessage, log, runOnce, workerId } from "../server/jobs/runner";
 import { sweepExpiredUploads } from "../server/modules/uploads";
 
 let stopping = false;
@@ -17,7 +17,7 @@ async function loop(slot: number) {
       const worked = await runOnce();
       if (!worked) await sleep(IDLE_MS);
     } catch (err) {
-      log("error", "worker loop error", { slot, error: (err as Error).message });
+      log("error", "worker loop error", { slot, error: errorMessage(err) });
       await sleep(5000);
     }
   }
@@ -29,7 +29,7 @@ async function sweeper() {
       const n = await sweepExpiredUploads();
       if (n) log("info", "aborted expired uploads", { count: n });
     } catch (err) {
-      log("error", "upload sweep failed", { error: (err as Error).message });
+      log("error", "upload sweep failed", { error: errorMessage(err) });
     }
     // Sleep in short steps so shutdown isn't delayed by the sweep interval.
     for (let waited = 0; waited < SWEEP_MS && !stopping; waited += 1000) await sleep(1000);

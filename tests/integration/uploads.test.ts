@@ -46,7 +46,7 @@ async function upload(
     const body = args.data.subarray((n - 1) * init.partSize, n * init.partSize);
     const checksum = sha256b64(body);
     const [signed] = await signUploadParts(ctx, init.uploadId, { parts: [{ partNumber: n, checksumSha256: checksum }] });
-    const res = await fetch(signed.url, { method: "PUT", headers: signed.headers, body });
+    const res = await fetch(signed.url, { method: "PUT", headers: signed.headers, body: new Uint8Array(body) });
     expect(res.status, await res.clone().text()).toBe(200);
     parts.push({ partNumber: n, etag: res.headers.get("etag")!, checksumSha256: checksum });
   }
@@ -139,7 +139,7 @@ describe("uploads", () => {
     const body = data.subarray(2 * first.init.partSize);
     const checksum = sha256b64(body);
     const [signed] = await signUploadParts(ctx, first.init.uploadId, { parts: [{ partNumber: 3, checksumSha256: checksum }] });
-    const res = await fetch(signed.url, { method: "PUT", headers: signed.headers, body });
+    const res = await fetch(signed.url, { method: "PUT", headers: signed.headers, body: new Uint8Array(body) });
     expect(res.status).toBe(200);
     const parts = [
       ...state.parts.map((p) => ({ partNumber: p.partNumber, etag: p.etag, checksumSha256: p.checksumSha256! })),
@@ -157,7 +157,7 @@ describe("uploads", () => {
     const [signed] = await signUploadParts(ctx, init.uploadId, {
       parts: [{ partNumber: 1, checksumSha256: sha256b64(Buffer.from("hello world")) }],
     });
-    const res = await fetch(signed.url, { method: "PUT", headers: signed.headers, body: Buffer.from("hello WORLD") });
+    const res = await fetch(signed.url, { method: "PUT", headers: signed.headers, body: new Uint8Array(Buffer.from("hello WORLD")) });
     expect(res.status).toBe(400);
   });
 

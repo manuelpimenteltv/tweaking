@@ -10,6 +10,7 @@ import { auditFromCtx, recordAudit } from "./audit";
 import { recordActivity } from "./activity";
 
 export async function listWorkspaces(ctx: AuthContext) {
+  authorize(ctx, "org.view_internal");
   return withTenant(ctx, (tx) =>
     tx
       .select({

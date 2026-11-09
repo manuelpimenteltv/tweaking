@@ -16,7 +16,22 @@ type Stream = {
   tags?: Record<string, string>;
   disposition?: { attached_pic?: number };
 };
-type Probe = { streams?: Stream[]; format?: { format_name?: string; duration?: string; bit_rate?: string; tags?: Record<string, string> } };
+type Probe = { streams?: Stream[]; format?: { format_name?: string; format_long_name?: string; duration?: string; bit_rate?: string; tags?: Record<string, string> } };
+
+/** ffprobe reports demuxer families ("mov,mp4,m4a,…"); resolve the actual container. */
+export function containerName(format?: Probe["format"]): string | undefined {
+  const name = format?.format_name;
+  if (!name) return undefined;
+  if (name.startsWith("mov,mp4")) {
+    const brand = format?.tags?.major_brand?.trim().toLowerCase();
+    if (brand === "qt") return "QuickTime (MOV)";
+    if (brand?.startsWith("m4a")) return "MPEG-4 Audio";
+    if (brand?.startsWith("3g")) return "3GPP";
+    return "MPEG-4";
+  }
+  if (name.startsWith("matroska")) return name.includes("webm") && format?.format_long_name?.includes("WebM") ? "WebM / Matroska" : "Matroska";
+  return format?.format_long_name ?? name;
+}
 
 export function parseRational(r: string | undefined): { num: number; den: number } | undefined {
   if (!r) return undefined;
@@ -45,6 +60,7 @@ export function toMediaInfo(p: Probe): MediaInfo {
   const video = streams.find((s) => s.codec_type === "video" && !s.disposition?.attached_pic);
   const audio = streams.find((s) => s.codec_type === "audio");
   const container = p.format?.format_name;
+  const displayContainer = containerName(p.format);
   const fps = parseRational(video?.r_frame_rate);
   const avg = parseRational(video?.avg_frame_rate);
   const startTimecode =
@@ -56,7 +72,7 @@ export function toMediaInfo(p: Probe): MediaInfo {
   const audioOk = !audio || BROWSER_AUDIO.has(audio.codec_name ?? "") || audio.codec_name?.startsWith("pcm_") === true;
 
   return {
-    container,
+    container: displayContainer,
     durationSec: Number.isFinite(duration) ? duration : undefined,
     width: video?.width,
     height: video?.height,

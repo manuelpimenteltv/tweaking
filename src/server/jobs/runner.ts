@@ -29,7 +29,7 @@ export async function runOnce(id = workerId): Promise<boolean> {
     log("info", "job succeeded", { jobId: job.id, type: job.type, ms: Date.now() - started });
   } catch (err) {
     const permanent = err instanceof PermanentJobError;
-    const message = (err as Error).message ?? String(err);
+    const message = permanent ? (err as Error).message : errorMessage(err);
     const final = await failJob(job, id, message, !permanent && !controller.signal.aborted);
     if (final) {
       await markVersionFailed(job, permanent ? message : `Processing failed after ${job.attempts} attempts: ${message}`, permanent ? (err as PermanentJobError).versionFields : {});
@@ -40,6 +40,12 @@ export async function runOnce(id = workerId): Promise<boolean> {
     clearInterval(beat);
   }
   return true;
+}
+
+/** Error message including the driver-level cause (Drizzle wraps PostgreSQL errors). */
+export function errorMessage(err: unknown): string {
+  const e = err as Error & { cause?: Error };
+  return e?.cause?.message ? `${e.message.split("\n")[0]} — ${e.cause.message}` : (e?.message ?? String(err));
 }
 
 export function log(level: "info" | "warn" | "error", msg: string, fields: Record<string, unknown> = {}) {
