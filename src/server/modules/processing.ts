@@ -1,0 +1,36 @@
+import { and, eq, inArray, isNull } from "drizzle-orm";
+import { uuid } from "@/lib/validation";
+import type { AuthContext } from "../authz/context";
+import { requireProject } from "../authz/project-access";
+import { assetVersions, assets, processingJobs } from "../db/schema";
+import { withTenant } from "../db/tenant";
+import { conflict, notFound } from "../errors";
+import { enqueueJob } from "../jobs/queue";
+import { parse } from "../lib/validate";
+import { auditFromCtx, recordAudit } from "./audit";
+
+/** Re-runs ingest for a failed version. Authorized users only (asset.processing_retry). */
+export async function retryProcessing(ctx: AuthContext, versionId: string) {
+  parse(uuid, versionId);
+  return withTenant(ctx, async (tx) => {
+    const [row] = await tx
+      .select({ projectId: assets.projectId, status: assetVersions.processingStatus, uploadedAt: assetVersions.uploadedAt })
+      .from(assetVersions)
+      .innerJoin(assets, eq(assets.id, assetVersions.assetId))
+      .where(and(eq(assetVersions.id, versionId), isNull(assets.deletedAt)))
+      .limit(1);
+    if (!row) throw notFound("Version");
+    await requireProject(tx, ctx, row.projectId, "asset.processing_retry");
+    if (!row.uploadedAt) throw conflict("This file hasn't finished uploading.");
+    if (row.status !== "failed") throw conflict("Only failed processing can be retried.");
+    const active = await tx
+      .select({ id: processingJobs.id })
+      .from(processingJobs)
+      .where(and(eq(processingJobs.assetVersionId, versionId), inArray(processingJobs.status, ["queued", "running"])));
+    if (active.length) throw conflict("Processing is already queued.");
+    await tx.update(assetVersions).set({ processingStatus: "processing", processingError: null }).where(eq(assetVersions.id, versionId));
+    const job = await enqueueJob(tx, { orgId: ctx.orgId, assetVersionId: versionId, type: "ingest", requestedBy: ctx.userId });
+    await recordAudit(tx, auditFromCtx(ctx, "processing.retried", { type: "asset_version", id: versionId }));
+    return job;
+  });
+}
