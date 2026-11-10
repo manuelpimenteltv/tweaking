@@ -2,7 +2,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { systemDb, type Executor } from "../db/client";
 import { processingJobs } from "../db/schema";
 
-export type JobType = "ingest" | "proxy";
+export type JobType = "ingest" | "proxy" | "document" | "sheet";
 
 export type ClaimedJob = typeof processingJobs.$inferSelect;
 

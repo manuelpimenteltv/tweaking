@@ -53,3 +53,15 @@ describe("annotation shapes", () => {
     expect(shapeSchema.safeParse({ tool: "ellipse", points: [[0, 0], [1, 1]], color: "red", width: 3 }).success).toBe(false);
   });
 });
+
+import { columnLetters, parseCellRef } from "@/lib/review";
+
+describe("cell references", () => {
+  it("converts between A1 references and indexes", () => {
+    expect(parseCellRef("A1")).toEqual({ row: 0, col: 0 });
+    expect(parseCellRef("AA10")).toEqual({ row: 9, col: 26 });
+    expect(parseCellRef("a1")).toBeNull();
+    for (const c of [0, 25, 26, 51, 701, 702, 16383]) expect(parseCellRef(`${columnLetters(c)}1`)?.col).toBe(c);
+    expect(columnLetters(16383)).toBe("XFD");
+  });
+});

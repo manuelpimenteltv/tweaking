@@ -32,15 +32,15 @@ export async function retryProcessing(ctx: AuthContext, versionId: string) {
       type = "ingest";
       await tx.update(assetVersions).set({ processingStatus: "processing", processingError: null }).where(eq(assetVersions.id, versionId));
     } else {
-      // A ready version whose most recent proxy job failed can rebuild just its review proxy.
-      const [lastProxy] = await tx
-        .select({ status: processingJobs.status })
+      // A ready version whose most recent preview job (proxy / document / sheet) failed can rebuild just that preview.
+      const [lastPreview] = await tx
+        .select({ status: processingJobs.status, type: processingJobs.type })
         .from(processingJobs)
-        .where(and(eq(processingJobs.assetVersionId, versionId), eq(processingJobs.type, "proxy")))
+        .where(and(eq(processingJobs.assetVersionId, versionId), inArray(processingJobs.type, ["proxy", "document", "sheet"])))
         .orderBy(desc(processingJobs.createdAt))
         .limit(1);
-      if (lastProxy?.status !== "failed") throw conflict("Only failed processing can be retried.");
-      type = "proxy";
+      if (lastPreview?.status !== "failed") throw conflict("Only failed processing can be retried.");
+      type = lastPreview.type as JobType;
     }
     const job = await enqueueJob(tx, { orgId: ctx.orgId, assetVersionId: versionId, type, requestedBy: ctx.userId });
     await recordAudit(tx, auditFromCtx(ctx, "processing.retried", { type: "asset_version", id: versionId }, { job: type }));

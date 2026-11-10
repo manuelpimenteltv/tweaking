@@ -3,11 +3,14 @@ import { randomUUID } from "node:crypto";
 import { env } from "../env";
 import { PermanentJobError, markVersionFailed, runIngest } from "./ingest";
 import { runProxy } from "./proxy";
+import { runDocument, runSheet } from "./documents";
 import { claimJob, completeJob, failJob, heartbeat, type ClaimedJob, type JobType } from "./queue";
 
 const HANDLERS: Record<JobType, (job: ClaimedJob, signal: AbortSignal) => Promise<void>> = {
   ingest: runIngest,
   proxy: runProxy,
+  document: runDocument,
+  sheet: runSheet,
 };
 
 export const workerId = `${hostname()}:${process.pid}:${randomUUID().slice(0, 8)}`;

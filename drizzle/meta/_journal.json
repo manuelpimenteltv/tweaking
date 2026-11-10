@@ -36,6 +36,20 @@
       "when": 1794343705304,
       "tag": "0004_review_security",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1794349051755,
+      "tag": "0005_document_anchors",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1794349129916,
+      "tag": "0006_backfill_thread_position",
+      "breakpoints": true
     }
   ]
 }

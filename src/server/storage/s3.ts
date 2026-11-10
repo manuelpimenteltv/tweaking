@@ -229,7 +229,7 @@ export class S3StorageProvider implements ObjectStorageProvider {
     return res.Body as Readable;
   }
 
-  async put(key: string, body: Buffer, opts: { contentType: string; cacheControl?: string }) {
+  async put(key: string, body: Buffer, opts: { contentType: string; cacheControl?: string; contentEncoding?: string }) {
     await this.wrap(
       "putObject",
       this.client.send(
@@ -239,6 +239,7 @@ export class S3StorageProvider implements ObjectStorageProvider {
           Body: body,
           ContentType: opts.contentType,
           CacheControl: opts.cacheControl,
+          ContentEncoding: opts.contentEncoding,
         }),
       ),
     );

@@ -11,6 +11,7 @@ import {
   bigint,
   boolean,
   customType,
+  doublePrecision,
   index,
   inet,
   integer,
@@ -390,6 +391,10 @@ export type MediaInfo = {
   browserPlayable?: boolean;
   /** Non-fatal processing notes shown to users (e.g. preview unavailable). */
   notes?: string[];
+  /** Documents/presentations: page or slide count of the review PDF. */
+  pages?: number;
+  /** Spreadsheets: sheets in workbook order. */
+  sheets?: { name: string; rows: number; cols: number; hidden?: boolean }[];
 };
 
 export const assetVersions = pgTable(
@@ -566,6 +571,10 @@ export const commentThreads = pgTable(
     /** Frame number in the version's (proxy) timeline: 0-based, at fps num/den. */
     frame: integer("frame"),
     endFrame: integer("end_frame"),
+    /** 1-based page (documents) or slide (presentations). */
+    page: integer("page"),
+    /** Reading-order key (frame / page+region / sheet+row+col) used to sort threads by position. */
+    position: doublePrecision("position"),
     /** Anchor context captured at creation: {fpsNum, fpsDen, timecode, region…}. */
     anchor: jsonb("anchor").$type<ThreadAnchor>().notNull().default({}),
     status: threadStatus("status").notNull().default("open"),
@@ -581,7 +590,21 @@ export const commentThreads = pgTable(
   ],
 );
 
-export type ThreadAnchor = { fpsNum?: number; fpsDen?: number; timecode?: string; seconds?: number };
+export type Region = { x: number; y: number; w: number; h: number };
+export type ThreadAnchor = {
+  fpsNum?: number;
+  fpsDen?: number;
+  timecode?: string;
+  seconds?: number;
+  /** Normalized rectangle on the image or page (0–1). */
+  region?: Region;
+  /** Spreadsheet anchor: sheet name, A1 reference and 0-based row/col. */
+  sheet?: string;
+  sheetIndex?: number;
+  cell?: string;
+  row?: number;
+  col?: number;
+};
 
 export const comments = pgTable(
   "comments",
@@ -629,6 +652,7 @@ export const annotations = pgTable(
       .notNull()
       .references(() => comments.id, { onDelete: "cascade" }),
     frame: integer("frame"),
+    pageNumber: integer("page_number"),
     shapes: jsonb("shapes").$type<AnnotationShape[]>().notNull(),
     createdBy: uuid("created_by").references(() => users.id),
     createdAt: createdAt(),

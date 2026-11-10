@@ -34,6 +34,9 @@ const BLOCKED_EXTENSIONS = new Set([
   "xhtml", "svgz", "hta", "lnk", "reg", "php", "py", "rb", "pl",
 ]);
 
+/** Image formats every current browser displays natively. Others get a large WebP review copy. */
+export const BROWSER_IMAGE_MIME = new Set(["image/jpeg", "image/png", "image/webp", "image/gif", "image/avif"]);
+
 export const KIND_LABELS: Record<AssetKind, string> = {
   video: "Video",
   audio: "Audio",

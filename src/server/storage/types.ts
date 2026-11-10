@@ -48,7 +48,7 @@ export interface ObjectStorageProvider {
     },
   ): Promise<string>;
   getStream(key: string, range?: { start: number; end: number }): Promise<Readable>;
-  put(key: string, body: Buffer, opts: { contentType: string; cacheControl?: string }): Promise<void>;
+  put(key: string, body: Buffer, opts: { contentType: string; cacheControl?: string; contentEncoding?: string }): Promise<void>;
   /** Streams a local file (up to 5 GB single PUT) — used for generated proxies. */
   putFile(key: string, path: string, opts: { contentType: string; cacheControl?: string }): Promise<number>;
   delete(key: string): Promise<void>;

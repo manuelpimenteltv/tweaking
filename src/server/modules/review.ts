@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
-import { createThreadSchema, replySchema, threadFilterSchema, type ThreadFilter } from "@/lib/review";
+import { createThreadSchema, parseCellRef, replySchema, threadFilterSchema, type Anchor, type ThreadFilter } from "@/lib/review";
 import { frameCount, frameToTimecode, type Fps } from "@/lib/timecode";
 import type { AuthContext } from "../authz/context";
 import { requireProject } from "../authz/project-access";
@@ -17,6 +17,8 @@ import {
   roles,
   users,
   type AnnotationShape,
+  type MediaInfo,
+  type ThreadAnchor,
 } from "../db/schema";
 import { withTenant } from "../db/tenant";
 import { forbidden, invalid, notFound } from "../errors";
@@ -32,6 +34,7 @@ async function requireVersion(tx: Tx, ctx: AuthContext, versionId: string, permi
       mediaInfo: assetVersions.mediaInfo,
       assetId: assets.id,
       assetName: assets.name,
+      kind: assets.kind,
       projectId: assets.projectId,
     })
     .from(assetVersions)
@@ -86,33 +89,94 @@ async function insertComment(tx: Tx, ctx: AuthContext, projectId: string, thread
   return comment;
 }
 
+type ResolvedAnchor = {
+  anchorType: "none" | "frame" | "page" | "region" | "sheet_cell";
+  frame: number | null;
+  page: number | null;
+  position: number | null;
+  anchor: ThreadAnchor;
+};
+
+/**
+ * Validates an anchor against the asset kind and the version's processed
+ * structure (frame count, page count, sheet list) and derives a sort position.
+ */
+function resolveAnchor(v: { kind: string; mediaInfo: MediaInfo }, anchor: Anchor | null, hasShapes: boolean): ResolvedAnchor {
+  const none: ResolvedAnchor = { anchorType: "none", frame: null, page: null, position: null, anchor: {} };
+  const info = v.mediaInfo;
+  if (!anchor) {
+    if (hasShapes) throw invalid("Drawings must be attached to a frame, page or image.");
+    return none;
+  }
+  switch (anchor.type) {
+    case "frame": {
+      if (v.kind !== "video" && v.kind !== "audio") throw invalid("Frame comments are only for video.");
+      const fps: Fps = info.fps ?? { num: 24, den: 1 };
+      const total = frameCount(info.durationSec, fps);
+      if (total != null && anchor.frame >= total) throw invalid("That frame is outside the clip.");
+      return {
+        anchorType: "frame",
+        frame: anchor.frame,
+        page: null,
+        position: anchor.frame,
+        anchor: {
+          fpsNum: fps.num,
+          fpsDen: fps.den,
+          seconds: (anchor.frame * fps.den) / fps.num,
+          timecode: frameToTimecode(anchor.frame, fps, info.startTimecode),
+        },
+      };
+    }
+    case "page": {
+      if (v.kind !== "document" && v.kind !== "presentation") throw invalid("Page comments are only for documents and presentations.");
+      if (!info.pages) throw invalid("This document hasn't been processed yet.");
+      if (anchor.page > info.pages) throw invalid(`This document has ${info.pages} page${info.pages === 1 ? "" : "s"}.`);
+      const y = anchor.region?.y ?? 0;
+      return {
+        anchorType: anchor.region ? "region" : "page",
+        frame: null,
+        page: anchor.page,
+        position: anchor.page + y * 0.999,
+        anchor: anchor.region ? { region: anchor.region } : {},
+      };
+    }
+    case "region": {
+      if (v.kind !== "image") throw invalid("Region comments without a page are only for images.");
+      return { anchorType: "region", frame: null, page: null, position: anchor.region.y * 1000 + anchor.region.x, anchor: { region: anchor.region } };
+    }
+    case "cell": {
+      if (v.kind !== "spreadsheet") throw invalid("Cell comments are only for spreadsheets.");
+      if (hasShapes) throw invalid("Drawings aren't available on spreadsheet cells.");
+      const sheetIndex = info.sheets?.findIndex((sh) => sh.name === anchor.sheet) ?? -1;
+      if (sheetIndex < 0) throw invalid(`There is no sheet named "${anchor.sheet}".`);
+      const ref = parseCellRef(anchor.cell)!;
+      return {
+        anchorType: "sheet_cell",
+        frame: null,
+        page: null,
+        position: sheetIndex * 1e10 + ref.row * 1e4 + ref.col,
+        anchor: { sheet: anchor.sheet, sheetIndex, cell: anchor.cell, row: ref.row, col: ref.col },
+      };
+    }
+  }
+}
+
 export async function createThread(ctx: AuthContext, input: unknown) {
   const data = parse(createThreadSchema, input);
   return withTenant(ctx, async (tx) => {
     const v = await requireVersion(tx, ctx, data.versionId, "comment.create");
-    const fps: Fps = v.mediaInfo.fps ?? { num: 24, den: 1 };
-    const total = frameCount(v.mediaInfo.durationSec, fps);
-    if (data.frame != null && total != null && data.frame >= total) throw invalid("That frame is outside the clip.");
-    if (data.shapes.length && data.frame == null && (v.mediaInfo.durationSec ?? 0) > 0) {
-      throw invalid("Drawings on video must be attached to a frame.");
-    }
+    const a = resolveAnchor(v, data.anchor, data.shapes.length > 0);
     const [thread] = await tx
       .insert(commentThreads)
       .values({
         organizationId: ctx.orgId,
         assetId: v.assetId,
         assetVersionId: v.versionId,
-        anchorType: data.frame == null ? "none" : "frame",
-        frame: data.frame,
-        anchor:
-          data.frame == null
-            ? {}
-            : {
-                fpsNum: fps.num,
-                fpsDen: fps.den,
-                seconds: (data.frame * fps.den) / fps.num,
-                timecode: frameToTimecode(data.frame, fps, v.mediaInfo.startTimecode),
-              },
+        anchorType: a.anchorType,
+        frame: a.frame,
+        page: a.page,
+        position: a.position,
+        anchor: a.anchor,
         createdBy: ctx.userId,
       })
       .returning();
@@ -122,7 +186,8 @@ export async function createThread(ctx: AuthContext, input: unknown) {
         organizationId: ctx.orgId,
         assetVersionId: v.versionId,
         commentId: comment.id,
-        frame: data.frame,
+        frame: a.frame,
+        pageNumber: a.page,
         shapes: data.shapes as AnnotationShape[],
         createdBy: ctx.userId,
       });
@@ -133,7 +198,7 @@ export async function createThread(ctx: AuthContext, input: unknown) {
       subjectType: "asset",
       subjectId: v.assetId,
       subjectName: v.assetName,
-      data: { version: v.versionNumber, frame: data.frame, mentions: data.mentions.length },
+      data: { version: v.versionNumber, anchor: a.anchorType, frame: a.frame, page: a.page, mentions: data.mentions.length },
     });
     return { threadId: thread.id, commentId: comment.id };
   });
@@ -206,12 +271,16 @@ export type ReviewComment = {
   deleted: boolean;
   createdAt: string;
   mentions: { id: string; name: string }[];
-  annotation: { id: string; frame: number | null; shapes: AnnotationShape[] } | null;
+  annotation: { id: string; frame: number | null; page: number | null; shapes: AnnotationShape[] } | null;
 };
 
 export type ReviewThread = {
   id: string;
+  anchorType: "none" | "frame" | "frame_range" | "page" | "slide" | "sheet_cell" | "region";
   frame: number | null;
+  page: number | null;
+  /** Region / sheet / cell details (normalized region, sheet name, A1 ref). */
+  anchor: ThreadAnchor;
   timecode: string | null;
   status: "open" | "resolved";
   createdAt: string;
@@ -240,7 +309,7 @@ export async function listThreads(ctx: AuthContext, versionId: string, filter: T
         ? [desc(commentThreads.createdAt)]
         : f.sort === "oldest"
           ? [asc(commentThreads.createdAt)]
-          : [sql`${commentThreads.frame} asc nulls first`, asc(commentThreads.createdAt)];
+          : [sql`${commentThreads.position} asc nulls first`, asc(commentThreads.createdAt)];
 
     const resolver = sql<string | null>`(select name from users u where u.id = ${commentThreads.resolvedBy})`;
     const threads = await tx
@@ -280,14 +349,17 @@ export async function listThreads(ctx: AuthContext, versionId: string, filter: T
         deleted: !!r.c.deletedAt,
         createdAt: r.c.createdAt.toISOString(),
         mentions: mentionRows.filter((m) => m.commentId === r.c.id).map((m) => ({ id: m.id, name: m.name })),
-        annotation: ann ? { id: ann.id, frame: ann.frame, shapes: ann.shapes } : null,
+        annotation: ann ? { id: ann.id, frame: ann.frame, page: ann.pageNumber, shapes: ann.shapes } : null,
       });
       byThread.set(r.c.threadId, list);
     }
 
     const result: ReviewThread[] = threads.map(({ t, resolverName }) => ({
       id: t.id,
+      anchorType: t.anchorType,
       frame: t.frame,
+      page: t.page,
+      anchor: t.anchor,
       timecode: t.anchor.timecode ?? null,
       status: t.status,
       createdAt: t.createdAt.toISOString(),

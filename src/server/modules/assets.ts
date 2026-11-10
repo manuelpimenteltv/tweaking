@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, inArray, isNull, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { assetNameSchema, folderNameSchema, uuid } from "@/lib/validation";
+import { BROWSER_IMAGE_MIME } from "@/lib/file-types";
 import type { AuthContext } from "../authz/context";
 import { requireProject } from "../authz/project-access";
 import type { Tx } from "../db/client";
@@ -22,6 +23,7 @@ import { auditFromCtx, recordAudit } from "./audit";
 import { recordActivity } from "./activity";
 import { previewKeySql, signPreview } from "./previews";
 import { touchProject } from "./projects";
+import type { SheetManifest } from "../jobs/sheets";
 
 const MAX_FOLDER_DEPTH = 32;
 
@@ -394,7 +396,7 @@ export async function getAsset(ctx: AuthContext, assetId: string, versionNumber?
           })
           .from(previews)
           .innerJoin(storageLocations, eq(storageLocations.id, previews.storageLocationId))
-          .where(and(eq(previews.assetVersionId, selected.id), inArray(previews.kind, ["proxy", "sprite"])))
+          .where(and(eq(previews.assetVersionId, selected.id), inArray(previews.kind, ["proxy", "sprite", "pdf", "sheet_model"])))
       : [];
     const previewCount = selected
       ? (await tx.select({ n: sql<number>`count(*)::int` }).from(previews).where(eq(previews.assetVersionId, selected.id)))[0].n
@@ -436,12 +438,55 @@ export async function getAsset(ctx: AuthContext, assetId: string, versionNumber?
       }
     : null;
   const proxyJob = data.jobs.find((j) => j.type === "proxy");
+  const kind = data.asset.kind;
+  const ready = sel?.processingStatus === "ready" && sel.objectKey && sel.providerId === "platform";
+
+  // Documents & presentations: the review PDF (LibreOffice rendering) or the original PDF.
+  let documentUrl: string | null = null;
+  if ((kind === "document" || kind === "presentation") && ready) {
+    const pdf = data.media.find((m) => m.kind === "pdf" && m.objectKey);
+    if (pdf) documentUrl = await storage.presignDownload(pdf.objectKey!, { disposition: "inline", contentType: "application/pdf" });
+    else if (sel!.extension === "pdf" && sel!.mediaInfo.pages) {
+      documentUrl = await storage.presignDownload(sel!.objectKey!, { disposition: "inline", contentType: "application/pdf" });
+    }
+  }
+
+  // Spreadsheets: the manifest (sheet structure); row chunks are fetched on demand via getSheetChunkUrl.
+  let sheet: { manifest: SheetManifest } | null = null;
+  const manifestRow = data.media.find((m) => m.kind === "sheet_model" && m.objectKey);
+  if (kind === "spreadsheet" && manifestRow) {
+    try {
+      const chunks: Buffer[] = [];
+      for await (const c of (await storage.getStream(manifestRow.objectKey!)) as AsyncIterable<Buffer>) chunks.push(c);
+      sheet = { manifest: JSON.parse(Buffer.concat(chunks).toString("utf8")) as SheetManifest };
+    } catch (err) {
+      console.error("[assets] unreadable sheet manifest", err);
+    }
+  }
+
+  // Images: full-resolution original when the browser can display it, else the large review copy.
+  let imageUrl: string | null = null;
+  if (kind === "image" && ready) {
+    const proxy = data.media.find((m) => m.kind === "proxy" && m.objectKey);
+    const mime = sel!.detectedMimeType ?? "";
+    if (BROWSER_IMAGE_MIME.has(mime) && sel!.sizeBytes <= 64 * 1024 * 1024) {
+      imageUrl = await storage.presignDownload(sel!.objectKey!, { disposition: "inline", contentType: mime });
+    } else if (proxy) {
+      imageUrl = await storage.presignDownload(proxy.objectKey!, { disposition: "inline", contentType: "image/webp" });
+    }
+  }
+  const previewJob = data.jobs.find((j) => j.type === "document" || j.type === "sheet");
 
   return {
     ...data,
     renditions,
     sprite,
     proxyStatus: renditions.length ? ("ready" as const) : proxyJob ? (proxyJob.status === "failed" ? ("failed" as const) : ("processing" as const)) : ("none" as const),
+    documentUrl,
+    sheet,
+    imageUrl,
+    /** Status of the document/sheet preview job (null when the kind has none). */
+    previewStatus: documentUrl || sheet ? ("ready" as const) : previewJob ? (previewJob.status === "failed" ? ("failed" as const) : ("processing" as const)) : null,
     thumbnailUrl: await signPreview(sel?.thumbKey),
     posterUrl: await signPreview(sel?.posterKey),
     playbackUrl,
@@ -485,4 +530,24 @@ export async function getDownloadUrl(ctx: AuthContext, versionId: string) {
     await recordAudit(tx, auditFromCtx(ctx, "asset.downloaded", { type: "asset_version", id: versionId }, { asset: row.assetName, version: row.versionNumber }));
     return url;
   });
+}
+
+/** Signed URL for one row-chunk of a spreadsheet's review model (authorized like viewing the asset). */
+export async function getSheetChunkUrl(ctx: AuthContext, versionId: string, sheet: number, chunk: number) {
+  parse(uuid, versionId);
+  parse(z.object({ sheet: z.number().int().min(0).max(1000), chunk: z.number().int().min(0).max(100_000) }), { sheet, chunk });
+  const key = await withTenant(ctx, async (tx) => {
+    const [row] = await tx
+      .select({ projectId: assets.projectId, objectKey: storageLocations.objectKey })
+      .from(previews)
+      .innerJoin(assetVersions, eq(assetVersions.id, previews.assetVersionId))
+      .innerJoin(assets, eq(assets.id, assetVersions.assetId))
+      .innerJoin(storageLocations, eq(storageLocations.id, previews.storageLocationId))
+      .where(and(eq(previews.assetVersionId, versionId), eq(previews.kind, "sheet_model"), isNull(assets.deletedAt)))
+      .limit(1);
+    if (!row?.objectKey) throw notFound("Spreadsheet preview");
+    await requireProject(tx, ctx, row.projectId);
+    return row.objectKey.replace(/manifest\.json$/, `${sheet}/${chunk}.json`);
+  });
+  return platformStorage().presignDownload(key, { disposition: "inline", contentType: "application/json", expiresInSeconds: 600 });
 }

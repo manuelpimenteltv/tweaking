@@ -37,6 +37,11 @@ const schema = z.object({
 
   FFPROBE_PATH: z.string().default("ffprobe"),
   FFMPEG_PATH: z.string().default("ffmpeg"),
+  SOFFICE_PATH: z.string().default("soffice"),
+  PDFINFO_PATH: z.string().default("pdfinfo"),
+  PDFTOPPM_PATH: z.string().default("pdftoppm"),
+  /** Largest document/spreadsheet the worker converts for preview (bytes). */
+  DOCUMENT_PREVIEW_MAX_BYTES: z.coerce.number().int().positive().default(512 * 1024 * 1024),
   WORKER_CONCURRENCY: z.coerce.number().int().positive().default(2),
   WORKER_JOB_TIMEOUT_SECONDS: z.coerce.number().int().positive().default(1800),
 });

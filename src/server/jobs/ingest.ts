@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { and, eq, sql } from "drizzle-orm";
 import { fileTypeFromBuffer } from "file-type";
 import sharp from "sharp";
-import type { AssetKind } from "@/lib/file-types";
+import { BROWSER_IMAGE_MIME, type AssetKind } from "@/lib/file-types";
 import { assetVersions, assets, previews, storageConnections, storageLocations, type MediaInfo } from "../db/schema";
 import { withScope } from "../db/tenant";
 import { env } from "../env";
@@ -21,6 +21,11 @@ export class PermanentJobError extends Error {
 }
 
 const HEAD_BYTES = 4100;
+
+/** Formats the document/sheet pipelines can render (LibreOffice imports these). */
+const DOCUMENT_EXTENSIONS = new Set(["pdf", "doc", "docx", "rtf", "odt", "txt", "md", "pages", "ppt", "pptx", "odp", "key"]);
+const SHEET_EXTENSIONS = new Set(["xlsx", "xlsm", "xls", "ods", "csv", "tsv", "numbers"]);
+const IMAGE_REVIEW_WIDTH = 4096;
 const MAX_IMAGE_BUFFER = 512 * 1024 * 1024;
 const THUMB_WIDTH = 640;
 const POSTER_WIDTH = 1920;
@@ -64,6 +69,7 @@ type Loaded = {
   locationId: string;
   connection: typeof storageConnections.$inferSelect;
   sizeBytes: number;
+  extension: string;
 };
 
 async function load(job: ClaimedJob): Promise<Loaded> {
@@ -95,19 +101,23 @@ async function load(job: ClaimedJob): Promise<Loaded> {
       locationId: row.version.storageLocationId,
       connection: row.connection,
       sizeBytes: row.version.sizeBytes,
+      extension: row.version.extension,
     };
   });
 }
 
-type Derived = { kind: "thumbnail" | "poster"; buffer: Buffer; width: number; height: number };
+type Derived = { kind: "thumbnail" | "poster" | "proxy"; buffer: Buffer; width: number; height: number };
 
-async function renderPreviews(source: Buffer): Promise<Derived[]> {
+/** Thumbnail + poster; plus a large review copy for images browsers can't display (TIFF, PSD, HEIC…). */
+async function renderPreviews(source: Buffer, reviewCopy = false): Promise<Derived[]> {
   const out: Derived[] = [];
-  for (const [kind, width] of [["thumbnail", THUMB_WIDTH], ["poster", POSTER_WIDTH]] as const) {
+  const sizes: [Derived["kind"], number][] = [["thumbnail", THUMB_WIDTH], ["poster", POSTER_WIDTH]];
+  if (reviewCopy) sizes.push(["proxy", IMAGE_REVIEW_WIDTH]);
+  for (const [kind, width] of sizes) {
     const { data, info } = await sharp(source, { limitInputPixels: 268_402_689, failOn: "error" })
       .rotate()
       .resize({ width, withoutEnlargement: true })
-      .webp({ quality: kind === "thumbnail" ? 72 : 82 })
+      .webp({ quality: kind === "thumbnail" ? 72 : kind === "proxy" ? 90 : 82 })
       .toBuffer({ resolveWithObject: true });
     out.push({ kind, buffer: data, width: info.width, height: info.height });
   }
@@ -180,7 +190,7 @@ export async function runIngest(job: ClaimedJob, signal: AbortSignal): Promise<v
       try {
         const meta = await sharp(buffer).metadata();
         mediaInfo = { width: meta.autoOrient?.width ?? meta.width, height: meta.autoOrient?.height ?? meta.height, colorSpace: meta.space };
-        derived.push(...(await renderPreviews(buffer)));
+        derived.push(...(await renderPreviews(buffer, !BROWSER_IMAGE_MIME.has(detected?.mime ?? ""))));
       } catch (err) {
         notes.push(`Preview unavailable for this image format (${(err as Error).message}).`);
       }
@@ -188,7 +198,7 @@ export async function runIngest(job: ClaimedJob, signal: AbortSignal): Promise<v
       notes.push("Image is too large for in-process preview generation.");
     }
   }
-  // Documents, spreadsheets and presentations get page/slide renders in Phase 3.
+  // Documents, presentations and spreadsheets are rendered by follow-up jobs (see below).
 
   // 3. Persist derived files to native storage, then metadata — originals untouched.
   const platform = platformStorage();
@@ -242,6 +252,13 @@ export async function runIngest(job: ClaimedJob, signal: AbortSignal): Promise<v
     // Videos get browser review proxies + timeline sprites in a follow-up job (same transaction).
     if (v.kind === "video" && mediaInfo.width) {
       await enqueueJob(tx, { orgId: v.orgId, assetVersionId: v.versionId, type: "proxy" });
+    }
+    // Documents and presentations get a review PDF; spreadsheets a grid model.
+    if ((v.kind === "document" || v.kind === "presentation") && DOCUMENT_EXTENSIONS.has(v.extension)) {
+      await enqueueJob(tx, { orgId: v.orgId, assetVersionId: v.versionId, type: "document" });
+    }
+    if (v.kind === "spreadsheet" && SHEET_EXTENSIONS.has(v.extension)) {
+      await enqueueJob(tx, { orgId: v.orgId, assetVersionId: v.versionId, type: "sheet" });
     }
   });
 }
