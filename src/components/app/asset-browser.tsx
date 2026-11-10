@@ -57,6 +57,7 @@ type AssetItem = {
   uploaderName: string | null;
   createdAt: string;
   previewUrl: string | null;
+  previewPending: boolean;
 };
 
 type Props = {
@@ -116,7 +117,7 @@ export function AssetBrowser(props: Props) {
   );
 
   // Poll while files are still uploading/processing so status and thumbnails appear without a reload.
-  const busy = assets.some((a) => a.processingStatus === "processing" || a.processingStatus === "awaiting_upload");
+  const busy = assets.some((a) => a.processingStatus === "processing" || a.processingStatus === "awaiting_upload" || a.previewPending);
   useEffect(() => {
     if (!busy) return;
     const t = setInterval(() => router.refresh(), 3000);

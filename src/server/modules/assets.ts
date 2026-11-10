@@ -111,6 +111,9 @@ export async function listFolderContents(ctx: AuthContext, input: z.input<typeof
         mediaInfo: assetVersions.mediaInfo,
         uploaderName: users.name,
         previewKey: previewKeySql(assets.currentVersionId),
+        /** Follow-up jobs (proxy, document, sheet) still running: thumbnails and previews may still change. */
+        previewPending: sql<boolean>`exists (select 1 from processing_jobs j where j.asset_version_id = ${assets.currentVersionId}
+          and j.status in ('queued','running'))`,
       })
       .from(assets)
       .leftJoin(assetVersions, eq(assetVersions.id, assets.currentVersionId))

@@ -6,7 +6,7 @@ import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState, 
 import { createThreadAction, deleteCommentAction, mentionableAction, replyAction, setThreadStatusAction } from "@/server/actions/review";
 import type { AnnotationShape } from "@/server/db/schema";
 import type { ReviewComment, ReviewThread } from "@/server/modules/review";
-import type { ThreadFilter } from "@/lib/review";
+import type { Anchor, ThreadFilter } from "@/lib/review";
 import { timeAgo } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import { Button, IconButton } from "@/components/ui/button";
@@ -28,18 +28,25 @@ type Props = {
   onSelect: (t: ReviewThread) => void;
   canComment: boolean;
   currentUserId: string;
-  frame: number;
-  timecode: string;
-  tc: (frame: number) => string;
-  draft: { count: number; frame: number | null };
+  /** Where a new comment attaches by default (current frame / page / cell); null = only general comments. */
+  position: { label: string; anchor: Anchor } | null;
+  /** Short label for a thread's anchor (timecode, "p. 3", "Summary!B7"…); null = general. */
+  describe: (t: ReviewThread) => string | null;
+  /** Monospace labels (timecodes, cell refs) vs. prose labels (pages). */
+  monoLabels?: boolean;
+  draft: { count: number; label: string | null; offPosition: boolean };
+  /** Whether this medium supports drawings (spreadsheets don't). */
+  drawingSupported: boolean;
+  emptyHint: string;
   drawing: boolean;
   onStartDrawing: () => void;
   onClearDraft: () => void;
-  takeDraft: () => { shapes: AnnotationShape[]; frame: number | null };
+  takeDraft: () => { shapes: AnnotationShape[]; anchor: Anchor | null };
   onPosted: (threadId: string) => Promise<void>;
   onChanged: () => Promise<void>;
-  onGoToFrame: (frame: number) => void;
-  pause: () => void;
+  onGoToDraft: () => void;
+  /** Called when typing starts at the current position (video pauses). */
+  pause?: () => void;
 };
 
 export const CommentsPanel = forwardRef<ComposerApi, Props>(function CommentsPanel(p, ref) {
@@ -94,11 +101,11 @@ export const CommentsPanel = forwardRef<ComposerApi, Props>(function CommentsPan
           </div>
           <select
             aria-label="Sort comments"
-            value={p.filter.sort ?? "timecode"}
+            value={p.filter.sort === "timecode" ? "position" : (p.filter.sort ?? "position")}
             onChange={(e) => p.onFilter({ ...p.filter, sort: e.target.value as ThreadFilter["sort"] })}
             className="ml-auto h-7 rounded-md border border-border bg-surface-2 px-1.5 text-[12px]"
           >
-            <option value="timecode">By timecode</option>
+            <option value="position">By position</option>
             <option value="oldest">Oldest first</option>
             <option value="newest">Newest first</option>
           </select>
@@ -154,7 +161,7 @@ export const CommentsPanel = forwardRef<ComposerApi, Props>(function CommentsPan
           <div className="flex flex-col items-center gap-2 px-6 py-12 text-center text-[13px] text-muted">
             <MessageSquare size={22} className="text-faint" />
             {filtered ? "No comments match these filters." : `No comments on v${p.versionNumber} yet.`}
-            {!filtered && p.canComment && <span className="text-[12px] text-faint">Pause on a frame and press C to comment, or D to draw.</span>}
+            {!filtered && p.canComment && <span className="text-[12px] text-faint">{p.emptyHint}</span>}
           </div>
         ) : (
           <ol>
@@ -187,6 +194,8 @@ function renderBody(c: ReviewComment): ReactNode {
 
 function ThreadCard({
   thread: t,
+  describe,
+  monoLabels,
   selected,
   onSelect,
   canComment,
@@ -201,6 +210,7 @@ function ThreadCard({
   const [root, ...replies] = t.comments;
   const hasDrawing = t.comments.some((c) => c.annotation);
   const isSelected = selected === t.id;
+  const label = describe(t);
 
   const setStatus = (status: "open" | "resolved") =>
     start(async () => {
@@ -219,10 +229,10 @@ function ThreadCard({
         t.status === "resolved" && !isSelected && "opacity-70",
       )}
     >
-      <div className="flex items-center gap-2" onClick={() => onSelect(t)} role="button" tabIndex={0} onKeyDown={(e) => e.key === "Enter" && onSelect(t)} aria-label={`Go to comment${t.timecode ? ` at ${t.timecode}` : ""}`}>
-        {t.frame != null ? (
-          <span className="rounded bg-surface-3 px-1.5 py-0.5 font-mono text-[11px] text-accent tabular" data-testid="thread-timecode">
-            {t.timecode}
+      <div className="flex items-center gap-2" onClick={() => onSelect(t)} role="button" tabIndex={0} onKeyDown={(e) => e.key === "Enter" && onSelect(t)} aria-label={`Go to comment${label ? ` at ${label}` : ""}`}>
+        {label ? (
+          <span className={cn("rounded bg-surface-3 px-1.5 py-0.5 text-[11px] text-accent tabular", monoLabels && "font-mono")} data-testid="thread-anchor">
+            {label}
           </span>
         ) : (
           <span className="rounded bg-surface-3 px-1.5 py-0.5 text-[11px] text-muted">General</span>
@@ -491,25 +501,25 @@ function ReplyBox({ people, onSubmit, onCancel }: { people: Person[]; onSubmit: 
 
 const Composer = forwardRef<ComposerApi, Props & { people: Person[]; toast: ReturnType<typeof useToast> }>(function Composer(p, ref) {
   const [body, setBody] = useState("");
-  const [atFrame, setAtFrame] = useState(true);
+  const [atPosition, setAtPosition] = useState(true);
   const mentions = useMentions(p.people);
   const [pending, start] = useTransition();
   const ta = useRef<HTMLTextAreaElement>(null);
   useImperativeHandle(ref, () => ({ focus: () => ta.current?.focus() }), []);
 
   const hasDraft = p.draft.count > 0;
-  const anchorFrame = hasDraft ? p.draft.frame : atFrame ? p.frame : null;
+  const anchored = hasDraft || (atPosition && !!p.position);
 
   const submit = () => {
     if (!body.trim()) return;
-    const { shapes, frame: drawFrame } = p.takeDraft();
+    const drawn = p.takeDraft();
     start(async () => {
       const res = await createThreadAction(p.orgSlug, {
         versionId: p.versionId,
-        frame: shapes.length ? drawFrame : atFrame ? p.frame : null,
+        anchor: drawn.shapes.length ? drawn.anchor : atPosition && p.position ? p.position.anchor : null,
         body: body.trim(),
         mentions: mentionIds(body, mentions.picked),
-        shapes,
+        shapes: drawn.shapes,
       });
       if (!res.ok) {
         p.toast(res.error.message, "error");
@@ -517,7 +527,7 @@ const Composer = forwardRef<ComposerApi, Props & { people: Person[]; toast: Retu
       }
       setBody("");
       mentions.setPicked([]);
-      // Hand the keyboard back to the player so review shortcuts work right away.
+      // Hand the keyboard back to the viewer so review shortcuts work right away.
       ta.current?.blur();
       await p.onPosted(res.data.threadId);
     });
@@ -528,35 +538,47 @@ const Composer = forwardRef<ComposerApi, Props & { people: Person[]; toast: Retu
       <div className="mb-2 flex flex-wrap items-center gap-1.5 text-[12px]">
         {hasDraft ? (
           <span className="inline-flex items-center gap-1 rounded bg-accent-soft px-1.5 py-0.5 text-accent">
-            <PenLine size={12} /> {p.draft.count} drawing{p.draft.count === 1 ? "" : "s"} at <span className="font-mono">{p.tc(p.draft.frame ?? 0)}</span>
-            {p.draft.frame !== p.frame && (
-              <button type="button" className="ml-1 underline" onClick={() => p.onGoToFrame(p.draft.frame ?? 0)}>
-                go to frame
+            <PenLine size={12} /> {p.draft.count} drawing{p.draft.count === 1 ? "" : "s"}
+            {p.draft.label && (
+              <>
+                {" "}on <span className={cn(p.monoLabels && "font-mono")}>{p.draft.label}</span>
+              </>
+            )}
+            {p.draft.offPosition && (
+              <button type="button" className="ml-1 underline" onClick={p.onGoToDraft}>
+                go there
               </button>
             )}
             <button type="button" aria-label="Discard drawing" className="ml-0.5" onClick={p.onClearDraft}>
               <X size={12} />
             </button>
           </span>
-        ) : (
+        ) : p.position ? (
           <label className="inline-flex cursor-pointer items-center gap-1.5 text-muted">
-            <input type="checkbox" checked={atFrame} onChange={(e) => setAtFrame(e.target.checked)} className="accent-[var(--accent)]" />
-            At <span className="font-mono text-text" data-testid="composer-timecode">{p.timecode}</span>
+            <input type="checkbox" checked={atPosition} onChange={(e) => setAtPosition(e.target.checked)} className="accent-[var(--accent)]" />
+            At{" "}
+            <span className={cn("text-text", p.monoLabels && "font-mono")} data-testid="composer-position">
+              {p.position.label}
+            </span>
           </label>
+        ) : (
+          <span className="text-muted">General comment</span>
         )}
-        <Button size="sm" variant="ghost" className="ml-auto" onClick={p.onStartDrawing} aria-pressed={p.drawing}>
-          <PenLine size={13} /> {hasDraft ? "Draw more" : "Draw"}
-        </Button>
+        {p.drawingSupported && (
+          <Button size="sm" variant="ghost" className="ml-auto" onClick={p.onStartDrawing} aria-pressed={p.drawing}>
+            <PenLine size={13} /> {hasDraft ? "Draw more" : "Draw"}
+          </Button>
+        )}
       </div>
       <MentionTextarea
         inputRef={ta}
         value={body}
         onChange={(v) => {
           setBody(v);
-          if (v && atFrame) p.pause();
+          if (v && atPosition) p.pause?.();
         }}
         onSubmit={submit}
-        placeholder={anchorFrame != null ? "Leave a comment at this frame… (@ to mention)" : "Leave a general comment… (@ to mention)"}
+        placeholder={anchored ? "Leave a comment here… (@ to mention)" : "Leave a general comment… (@ to mention)"}
         label="New comment"
         mentions={mentions}
       />

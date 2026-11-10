@@ -89,7 +89,7 @@ test("frame-accurate review: draw, comment at a frame, reply, resolve, reopen, f
   await page.getByRole("listbox", { name: "Mention suggestions" }).getByRole("button", { name: /Ana Colorist/ }).click();
   await composer.press("Enter");
   const thread = page.getByTestId("thread").filter({ hasText: "Move the logo up" });
-  await expect(thread.getByTestId("thread-timecode")).toHaveText("01:00:00:10");
+  await expect(thread.getByTestId("thread-anchor")).toHaveText("01:00:00:10");
   await expect(thread.getByTestId("comment-body")).toHaveText("Move the logo up @Ana Colorist");
   await expect(page.getByRole("button", { name: "Comment at 01:00:00:10", exact: true })).toBeVisible(); // timeline marker
   await expect(layer.locator("polygon, rect, ellipse, line, polyline, text")).not.toHaveCount(0);

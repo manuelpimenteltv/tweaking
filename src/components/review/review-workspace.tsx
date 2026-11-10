@@ -8,29 +8,23 @@ import {
   Keyboard,
   Maximize,
   Minimize,
-  MessageSquare,
   Pause,
-  PanelRightClose,
-  PanelRightOpen,
   Play,
   SkipBack,
   SkipForward,
   Volume2,
   VolumeX,
 } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
-import { listThreadsAction } from "@/server/actions/review";
-import type { AnnotationShape } from "@/server/db/schema";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { ReviewThread } from "@/server/modules/review";
-import type { ThreadFilter } from "@/lib/review";
 import { frameToSeekTime, frameToTimecode, secondsToFrame, type Fps } from "@/lib/timecode";
 import { cn } from "@/lib/cn";
 import { IconButton } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/misc";
-import { useToast } from "@/components/ui/toast";
-import { AnnotationLayer, type DrawSettings } from "./annotation-layer";
-import { CommentsPanel, type ComposerApi } from "./comments-panel";
+import { AnnotationLayer } from "./annotation-layer";
 import { DrawToolbar } from "./draw-toolbar";
+import { PanelToggle, ReviewShell } from "./review-shell";
+import { savedShapes, useReview, type ReviewData } from "./use-review";
 
 export type Rendition = { name: string; url: string };
 export type Sprite = { url: string; interval: number; count: number; columns: number; rows: number; tileWidth: number; tileHeight: number };
@@ -48,66 +42,20 @@ type Props = {
     posterUrl: string | null;
     sprite: Sprite | null;
   };
-  initial: { threads: ReviewThread[]; counts: { open: number; resolved: number }; otherVersions: { versionNumber: number; open: number; total: number }[] };
+  initial: ReviewData;
   canComment: boolean;
   currentUserId: string;
   details: ReactNode;
 };
 
 const RATES = [0.25, 0.5, 1, 1.5, 2];
-const PANEL_MIN = 300;
-const PANEL_DEFAULT = 380;
 
-/** Per-browser UI preference (panel width, collapsed, annotation visibility). Server render uses the default. */
-const STORE_EVENT = "loupe-preference";
-function readStored(key: string): string | null {
-  try {
-    return localStorage.getItem(key);
-  } catch {
-    return null;
-  }
-}
-function useStoredState<T>(key: string, initial: T) {
-  const raw = useSyncExternalStore(
-    (notify) => {
-      window.addEventListener(STORE_EVENT, notify);
-      window.addEventListener("storage", notify);
-      return () => {
-        window.removeEventListener(STORE_EVENT, notify);
-        window.removeEventListener("storage", notify);
-      };
-    },
-    () => readStored(key),
-    () => null,
-  );
-  const [fallback, setFallback] = useState<T>(initial);
-  let value = fallback;
-  if (raw != null) {
-    try {
-      value = JSON.parse(raw) as T;
-    } catch {
-      /* corrupt value: use default */
-    }
-  }
-  const set = useCallback(
-    (v: T) => {
-      setFallback(v);
-      try {
-        localStorage.setItem(key, JSON.stringify(v));
-      } catch {
-        /* storage unavailable: in-memory only */
-      }
-      window.dispatchEvent(new Event(STORE_EVENT));
-    },
-    [key],
-  );
-  return [value, set] as const;
-}
-
+/** Video review: frame-accurate player as the primary area of the shared review shell. */
 export function ReviewWorkspace({ orgSlug, version, media, initial, canComment, currentUserId, details }: Props) {
   const { fps, durationSec } = media;
   const totalFrames = Math.max(1, Math.round((durationSec * fps.num) / fps.den));
-  const toast = useToast();
+  const review = useReview({ orgSlug, versionId: version.id, initial });
+  const { drawing, annotationsVisible } = review;
 
   // ── Player state ───────────────────────────────────────────────────────
   const video = useRef<HTMLVideoElement>(null);
@@ -129,22 +77,6 @@ export function ReviewWorkspace({ orgSlug, version, media, initial, canComment, 
   const [showTc, setShowTc] = useState<"tc" | "frames">("tc");
   const [picture, setPicture] = useState({ left: 0, top: 0, width: 0, height: 0 });
   const [help, setHelp] = useState(false);
-  const [annotationsVisible, setAnnotationsVisible] = useStoredState("loupe.review.annotations", true);
-
-  // ── Review state ───────────────────────────────────────────────────────
-  const [data, setData] = useState(initial);
-  const [filter, setFilter] = useState<ThreadFilter>({ status: "all", sort: "timecode" });
-  const [selected, setSelected] = useState<string | null>(null);
-  const [drawing, setDrawing] = useState(false);
-  const [draft, setDraft] = useState<AnnotationShape[]>([]);
-  const [draftFrame, setDraftFrame] = useState<number | null>(null);
-  const [draw, setDraw] = useState<DrawSettings>({ tool: "arrow", color: "#F2A93B", width: 4 });
-  const composer = useRef<ComposerApi>(null);
-
-  // ── Panel layout (resizable + collapsible, remembered per browser) ─────
-  const [panelWidth, setPanelWidth] = useStoredState("loupe.review.panelWidth", PANEL_DEFAULT);
-  const [collapsed, setCollapsed] = useStoredState("loupe.review.panelCollapsed", false);
-  const [tab, setTab] = useState<"comments" | "details">("comments");
 
   const source = media.renditions[renditionIdx] ?? media.renditions[0];
   const tc = (f: number) => (showTc === "tc" ? frameToTimecode(f, fps, media.startTimecode) : String(f));
@@ -204,7 +136,7 @@ export function ReviewWorkspace({ orgSlug, version, media, initial, canComment, 
       ro.disconnect();
       v?.removeEventListener("loadedmetadata", fit);
     };
-  }, [media.width, media.height, collapsed, panelWidth]);
+  }, [media.width, media.height, review.collapsed, review.panelWidth]);
 
   useEffect(() => {
     const onFs = () => setFullscreen(document.fullscreenElement === playerBox.current);
@@ -229,11 +161,11 @@ export function ReviewWorkspace({ orgSlug, version, media, initial, canComment, 
     const v = video.current;
     if (!v) return;
     if (v.paused) {
-      setDrawing(false);
+      review.setDrawing(false);
       if (frame >= totalFrames - 1) v.currentTime = 0;
       void v.play();
     } else v.pause();
-  }, [frame, totalFrames]);
+  }, [frame, totalFrames, review]);
 
   const switchRendition = (idx: number) => {
     const v = video.current;
@@ -257,49 +189,23 @@ export function ReviewWorkspace({ orgSlug, version, media, initial, canComment, 
     else void playerBox.current?.requestFullscreen();
   };
 
-  // ── Threads ────────────────────────────────────────────────────────────
-  const reload = useCallback(
-    async (f: ThreadFilter = filter) => {
-      const res = await listThreadsAction(orgSlug, version.id, f);
-      if (res.ok) setData(res.data);
-      else toast(res.error.message, "error");
-    },
-    [filter, orgSlug, toast, version.id],
-  );
-
-  const changeFilter = (f: ThreadFilter) => {
-    setFilter(f);
-    void reload(f);
-  };
-
-  // Pick up teammates' comments without a reload.
-  useEffect(() => {
-    const t = setInterval(() => {
-      if (document.visibilityState === "visible") void reload();
-    }, 15_000);
-    return () => clearInterval(t);
-  }, [reload]);
-
   const selectThread = (t: ReviewThread) => {
-    setSelected(t.id);
+    review.setSelected(t.id);
     if (t.frame != null) seekFrame(t.frame);
   };
 
   const startDrawing = () => {
     if (!canComment) return;
     video.current?.pause();
-    setDrawing(true);
-    setDraftFrame((f) => f ?? frame);
-    setAnnotationsVisible(true);
+    review.startDrawing({ type: "frame", frame: frameRef.current });
   };
+  const draftFrame = review.draftAnchor?.type === "frame" ? review.draftAnchor.frame : null;
 
   // Saved drawings are frame-specific: show them while paused on their frame.
-  const visibleShapes = useMemo(() => {
-    if (!annotationsVisible || playing) return [];
-    return data.threads.flatMap((t) =>
-      t.comments.flatMap((c) => (c.annotation && c.annotation.frame === frame ? c.annotation.shapes : [])),
-    );
-  }, [annotationsVisible, playing, data.threads, frame]);
+  const visibleShapes = useMemo(
+    () => (annotationsVisible && !playing ? savedShapes(review.data.threads, (a) => a.frame === frame) : []),
+    [annotationsVisible, playing, review.data.threads, frame],
+  );
 
   // ── Keyboard shortcuts ─────────────────────────────────────────────────
   useEffect(() => {
@@ -350,22 +256,20 @@ export function ReviewWorkspace({ orgSlug, version, media, initial, canComment, 
           }
           break;
         case "a":
-          setAnnotationsVisible(!annotationsVisible);
+          review.setAnnotationsVisible(!annotationsVisible);
           break;
         case "d":
-          if (drawing) setDrawing(false);
+          if (drawing) review.setDrawing(false);
           else startDrawing();
           break;
         case "c":
           e.preventDefault();
           v?.pause();
-          setCollapsed(false);
-          setTab("comments");
-          setTimeout(() => composer.current?.focus(), 0);
+          review.focusComposer();
           break;
         case "Escape":
-          if (drawing) setDrawing(false);
-          else setSelected(null);
+          if (drawing) review.setDrawing(false);
+          else review.setSelected(null);
           break;
         case "?":
           setHelp((h) => !h);
@@ -376,40 +280,20 @@ export function ReviewWorkspace({ orgSlug, version, media, initial, canComment, 
     return () => window.removeEventListener("keydown", onKey);
   });
 
-  // ── Panel resize ───────────────────────────────────────────────────────
-  const clampWidth = (w: number) => Math.round(Math.max(PANEL_MIN, Math.min(w, Math.max(PANEL_MIN, window.innerWidth * 0.6))));
-  const onResizeStart = (e: React.PointerEvent) => {
-    e.preventDefault();
-    const startX = e.clientX;
-    const startW = panelWidth;
-    const move = (ev: PointerEvent) => setPanelWidth(clampWidth(startW - (ev.clientX - startX)));
-    const up = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-  };
+  const markers = review.data.threads.filter((t) => t.frame != null);
 
-  const markers = data.threads.filter((t) => t.frame != null);
-
-  return (
-    <div className="flex min-h-0 flex-1">
-      {/* ── Primary: player ── */}
-      <div ref={playerBox} className="flex min-w-0 flex-1 flex-col bg-[#060607]" data-testid="player">
+  const main = (
+      <div ref={playerBox} className="flex min-h-0 flex-1 flex-col bg-[#060607]" data-testid="player">
         {drawing && (
           <DrawToolbar
-            settings={draw}
-            onChange={setDraw}
-            count={draft.length}
-            onUndo={() => setDraft((d) => d.slice(0, -1))}
-            onClear={() => {
-              setDraft([]);
-              setDraftFrame(null);
-            }}
+            settings={review.drawSettings}
+            onChange={review.setDrawSettings}
+            count={review.draft.length}
+            onUndo={review.undo}
+            onClear={review.clearDraft}
             onDone={() => {
-              setDrawing(false);
-              setTimeout(() => composer.current?.focus(), 0);
+              review.setDrawing(false);
+              review.focusComposer();
             }}
           />
         )}
@@ -431,13 +315,10 @@ export function ReviewWorkspace({ orgSlug, version, media, initial, canComment, 
             <AnnotationLayer
               size={{ width: picture.width, height: picture.height }}
               shapes={visibleShapes}
-              draft={annotationsVisible || drawing ? (draftFrame == null || draftFrame === frame ? draft : []) : []}
+              draft={annotationsVisible || drawing ? (draftFrame == null || draftFrame === frame ? review.draft : []) : []}
               drawing={drawing}
-              settings={draw}
-              onAdd={(s) => {
-                setDraft((d) => [...d, s]);
-                setDraftFrame((f) => f ?? frame);
-              }}
+              settings={review.drawSettings}
+              onAdd={(shape) => review.addShape(shape, { type: "frame", frame })}
             />
           </div>
           {help && <ShortcutHelp onClose={() => setHelp(false)} />}
@@ -449,7 +330,7 @@ export function ReviewWorkspace({ orgSlug, version, media, initial, canComment, 
           fps={fps}
           sprite={media.sprite}
           markers={markers}
-          selected={selected}
+          selected={review.selected}
           tc={tc}
           onSeek={seekFrame}
           onMarker={selectThread}
@@ -489,7 +370,7 @@ export function ReviewWorkspace({ orgSlug, version, media, initial, canComment, 
               <IconButton
                 label={drawing ? "Stop drawing (d)" : "Draw on frame (d)"}
                 active={drawing}
-                onClick={() => (drawing ? setDrawing(false) : startDrawing())}
+                onClick={() => (drawing ? review.setDrawing(false) : startDrawing())}
                 className="text-white/80 hover:bg-white/10"
               >
                 <PencilIcon />
@@ -498,7 +379,7 @@ export function ReviewWorkspace({ orgSlug, version, media, initial, canComment, 
             <IconButton
               label={annotationsVisible ? "Hide annotations (a)" : "Show annotations (a)"}
               active={!annotationsVisible}
-              onClick={() => setAnnotationsVisible(!annotationsVisible)}
+              onClick={() => review.setAnnotationsVisible(!annotationsVisible)}
               className="text-white/80 hover:bg-white/10"
             >
               {annotationsVisible ? <Eye size={15} /> : <EyeOff size={15} />}
@@ -568,101 +449,32 @@ export function ReviewWorkspace({ orgSlug, version, media, initial, canComment, 
             <IconButton label={fullscreen ? "Exit fullscreen (f)" : "Fullscreen (f)"} onClick={toggleFullscreen} className="text-white/80 hover:bg-white/10">
               {fullscreen ? <Minimize size={15} /> : <Maximize size={15} />}
             </IconButton>
-            <IconButton
-              label={collapsed ? "Show comments panel" : "Hide comments panel"}
-              onClick={() => setCollapsed(!collapsed)}
-              className="text-white/80 hover:bg-white/10"
-            >
-              {collapsed ? <PanelRightOpen size={15} /> : <PanelRightClose size={15} />}
-            </IconButton>
+            <PanelToggle review={review} className="text-white/80 hover:bg-white/10" />
           </div>
         </div>
       </div>
+  );
 
-      {/* ── Secondary: comments & review controls ── */}
-      {collapsed ? (
-        <button
-          type="button"
-          onClick={() => setCollapsed(false)}
-          className="flex w-10 shrink-0 flex-col items-center gap-2 border-l border-border bg-surface-1 pt-3 text-muted hover:text-text"
-          aria-label="Show comments panel"
-        >
-          <MessageSquare size={16} />
-          <span className="text-[11px] tabular">{data.counts.open}</span>
-        </button>
-      ) : (
-        <>
-          <div
-            role="separator"
-            aria-orientation="vertical"
-            aria-label="Resize comments panel"
-            aria-valuenow={panelWidth}
-            aria-valuemin={PANEL_MIN}
-            tabIndex={0}
-            onPointerDown={onResizeStart}
-            onKeyDown={(e) => {
-              if (e.key === "ArrowLeft") setPanelWidth(clampWidth(panelWidth + 24));
-              if (e.key === "ArrowRight") setPanelWidth(clampWidth(panelWidth - 24));
-            }}
-            className="w-1 shrink-0 cursor-col-resize bg-border transition-colors hover:bg-accent focus-visible:bg-accent"
-          />
-          <aside className="flex shrink-0 flex-col bg-surface-1" style={{ width: panelWidth }} aria-label="Review panel" data-testid="review-panel">
-            <div role="tablist" className="flex gap-4 border-b border-border px-4 pt-2">
-              {(["comments", "details"] as const).map((t) => (
-                <button
-                  key={t}
-                  role="tab"
-                  type="button"
-                  aria-selected={tab === t}
-                  onClick={() => setTab(t)}
-                  className={cn("-mb-px border-b-2 pb-2 text-[13px]", tab === t ? "border-accent text-text" : "border-transparent text-muted hover:text-text")}
-                >
-                  {t === "comments" ? `Comments${data.counts.open ? ` (${data.counts.open})` : ""}` : "Details"}
-                </button>
-              ))}
-            </div>
-            <div className={cn("min-h-0 flex-1 flex-col", tab === "comments" ? "flex" : "hidden")}>
-              <CommentsPanel
-                ref={composer}
-                orgSlug={orgSlug}
-                versionId={version.id}
-                versionNumber={version.number}
-                data={data}
-                filter={filter}
-                onFilter={changeFilter}
-                selected={selected}
-                onSelect={selectThread}
-                canComment={canComment}
-                currentUserId={currentUserId}
-                frame={frame}
-                timecode={frameToTimecode(frame, fps, media.startTimecode)}
-                tc={(f) => frameToTimecode(f, fps, media.startTimecode)}
-                draft={{ count: draft.length, frame: draftFrame }}
-                drawing={drawing}
-                onStartDrawing={startDrawing}
-                onClearDraft={() => {
-                  setDraft([]);
-                  setDraftFrame(null);
-                  setDrawing(false);
-                }}
-                takeDraft={() => ({ shapes: draft, frame: draftFrame })}
-                onPosted={async (threadId) => {
-                  setDraft([]);
-                  setDraftFrame(null);
-                  setDrawing(false);
-                  setSelected(threadId);
-                  await reload();
-                }}
-                onChanged={reload}
-                onGoToFrame={seekFrame}
-                pause={() => video.current?.pause()}
-              />
-            </div>
-            <div className={cn("min-h-0 flex-1 overflow-y-auto", tab === "details" ? "block" : "hidden")}>{details}</div>
-          </aside>
-        </>
-      )}
-    </div>
+  return (
+    <ReviewShell
+      review={review}
+      orgSlug={orgSlug}
+      version={version}
+      canComment={canComment}
+      currentUserId={currentUserId}
+      details={details}
+      main={main}
+      position={{ label: frameToTimecode(frame, fps, media.startTimecode), anchor: { type: "frame", frame } }}
+      describe={(t) => t.timecode}
+      monoLabels
+      onSelectThread={selectThread}
+      onStartDrawing={canComment ? startDrawing : undefined}
+      draftLabel={draftFrame != null ? frameToTimecode(draftFrame, fps, media.startTimecode) : null}
+      draftOffPosition={draftFrame != null && draftFrame !== frame}
+      onGoToDraft={() => draftFrame != null && seekFrame(draftFrame)}
+      emptyHint="Pause on a frame and press C to comment, or D to draw."
+      pause={() => video.current?.pause()}
+    />
   );
 }
 

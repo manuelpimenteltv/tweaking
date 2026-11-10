@@ -3,8 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
+    "dev": "node scripts/copy-pdfjs-assets.mjs && next dev",
+    "build": "node scripts/copy-pdfjs-assets.mjs && next build",
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
@@ -18,7 +18,8 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test --trace off",
     "seed:demo": "tsx scripts/seed-demo.ts",
-    "media:backfill": "tsx scripts/backfill-proxies.ts"
+    "media:backfill": "tsx scripts/backfill-proxies.ts",
+    "assets:pdfjs": "node scripts/copy-pdfjs-assets.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1164.0",

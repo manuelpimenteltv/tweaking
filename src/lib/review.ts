@@ -98,3 +98,17 @@ export const threadFilterSchema = z.object({
 
 export type CreateThreadInput = z.input<typeof createThreadSchema>;
 export type ThreadFilter = z.input<typeof threadFilterSchema>;
+
+/** Normalized bounding box of a drawing (used as the region of page/image comments). */
+export function shapesBounds(shapes: { points: [number, number][]; tool: string }[]): { x: number; y: number; w: number; h: number } {
+  const xs = shapes.flatMap((s) => s.points.map((p) => p[0]));
+  const ys = shapes.flatMap((s) => s.points.map((p) => p[1]));
+  const clamp = (v: number) => Math.min(1, Math.max(0, v));
+  const x0 = clamp(Math.min(...xs));
+  const y0 = clamp(Math.min(...ys));
+  // Text grows to the right/down from its anchor point: give it a little room.
+  const pad = shapes.some((s) => s.tool === "text") ? 0.05 : 0;
+  const x1 = clamp(Math.max(...xs) + pad);
+  const y1 = clamp(Math.max(...ys) + pad);
+  return { x: x0, y: y0, w: Math.max(0.001, x1 - x0), h: Math.max(0.001, y1 - y0) };
+}

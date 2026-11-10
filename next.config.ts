@@ -21,12 +21,14 @@ const storage = storageOrigins().join(" ");
 const csp = [
   "default-src 'self'",
   // Next.js inlines bootstrap scripts; a nonce-based policy is planned (docs/SECURITY.md).
-  `script-src 'self' 'unsafe-inline'${dev ? " 'unsafe-eval'" : ""}`,
+  // 'wasm-unsafe-eval' lets PDF.js compile its image decoders (JPEG 2000, JBIG2); it does not allow JS eval.
+  `script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'${dev ? " 'unsafe-eval'" : ""}`,
+  "worker-src 'self' blob:",
   "style-src 'self' 'unsafe-inline'",
   `img-src 'self' data: blob: ${storage}`,
   `media-src 'self' blob: ${storage}`,
   `connect-src 'self' ${storage}${dev ? " ws:" : ""}`,
-  "font-src 'self'",
+  "font-src 'self' data:",
   "object-src 'none'",
   "base-uri 'self'",
   "form-action 'self'",

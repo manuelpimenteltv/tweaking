@@ -60,6 +60,7 @@ async function Project({ params, searchParams }: PageProps<"/o/[org]/projects/[p
           uploaderName: a.uploaderName,
           createdAt: a.createdAt.toISOString(),
           previewUrl: a.previewUrl,
+          previewPending: a.previewPending,
         }))}
         permissions={project.permissions}
         view={{ sort: view.sort, dir: view.dir, kind: kind ?? null, layout: view.layout }}

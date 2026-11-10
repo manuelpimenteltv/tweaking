@@ -72,8 +72,14 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-* {
-  border-color: var(--border);
+/* In the base layer so border-color utilities (border-accent, border-danger…) can override it.
+   Unlayered rules beat every @layer, which silently disabled those utilities. */
+@layer base {
+  *,
+  ::before,
+  ::after {
+    border-color: var(--border);
+  }
 }
 
 ::selection {

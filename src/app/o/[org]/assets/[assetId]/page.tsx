@@ -11,6 +11,9 @@ import { cn } from "@/lib/cn";
 import { getAsset } from "@/server/modules/assets";
 import { listThreads } from "@/server/modules/review";
 import { ReviewWorkspace } from "@/components/review/review-workspace";
+import { DocumentViewer } from "@/components/review/document-viewer";
+import { ImageViewer } from "@/components/review/image-viewer";
+import { SheetViewer } from "@/components/review/sheet-viewer";
 import { VersionSwitcher } from "@/components/review/version-switcher";
 import { requireOrg } from "@/server/next/session";
 
@@ -45,6 +48,13 @@ async function Asset({ params, searchParams }: PageProps<"/o/[org]/assets/[asset
                 <Badge>{KIND_LABELS[asset.kind as keyof typeof KIND_LABELS]}</Badge>
               </div>
 
+              {v.processingStatus === "ready" && (data.proxyStatus === "failed" || data.previewStatus === "failed") && (
+                <div className="rounded-md border border-warning/30 bg-warning-soft p-3 text-[12px]">
+                  <p className="font-medium text-warning">The review preview couldn&apos;t be generated</p>
+                  <p className="mt-1 text-muted">{data.jobs.find((j) => j.status === "failed")?.lastError}</p>
+                  {can("asset.processing_retry") && <RetryButton orgSlug={org} versionId={v.id} />}
+                </div>
+              )}
               {v.processingStatus === "failed" && (
                 <div className="rounded-md border border-danger/30 bg-danger-soft p-3 text-[12px]">
                   <p className="flex items-center gap-1.5 font-medium text-danger">
@@ -143,8 +153,22 @@ async function Asset({ params, searchParams }: PageProps<"/o/[org]/assets/[asset
   // Video review: needs the processed version with a frame rate, and a playable source
   // (review proxies preferred; a verified browser-playable original until they exist).
   const renditions = data.renditions.length ? data.renditions : data.playbackUrl ? [{ name: "Original", height: info.height ?? 0, url: data.playbackUrl }] : [];
-  const reviewable = asset.kind === "video" && v?.processingStatus === "ready" && !!info.fps && !!info.durationSec && renditions.length > 0;
-  const threads = reviewable && v ? await listThreads(ctx, v.id) : null;
+  const ready = v?.processingStatus === "ready";
+  const reviewMode: "video" | "document" | "sheet" | "image" | null = !ready
+    ? null
+    : asset.kind === "video" && info.fps && info.durationSec && renditions.length > 0
+      ? "video"
+      : (asset.kind === "document" || asset.kind === "presentation") && data.documentUrl && info.pages
+        ? "document"
+        : asset.kind === "spreadsheet" && data.sheet
+          ? "sheet"
+          : asset.kind === "image" && (data.imageUrl || data.posterUrl)
+            ? "image"
+            : null;
+  const threads = reviewMode && v ? await listThreads(ctx, v.id) : null;
+  const previewPending = data.proxyStatus === "processing" || data.previewStatus === "processing";
+  const previewFailed = data.proxyStatus === "failed" || data.previewStatus === "failed";
+  const shell = { orgSlug: org, canComment: can("comment.create"), currentUserId: ctx.userId, details };
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -184,7 +208,29 @@ async function Asset({ params, searchParams }: PageProps<"/o/[org]/assets/[asset
         />
       </header>
 
-      {reviewable && v && threads ? (
+      {reviewMode === "document" && v && threads ? (
+        <DocumentViewer
+          key={v.id}
+          {...shell}
+          version={{ id: v.id, number: v.versionNumber }}
+          documentUrl={data.documentUrl!}
+          pageCount={info.pages!}
+          presentation={asset.kind === "presentation"}
+          initial={threads}
+        />
+      ) : reviewMode === "sheet" && v && threads ? (
+        <SheetViewer key={v.id} {...shell} version={{ id: v.id, number: v.versionNumber }} manifest={data.sheet!.manifest} initial={threads} />
+      ) : reviewMode === "image" && v && threads ? (
+        <ImageViewer
+          key={v.id}
+          {...shell}
+          version={{ id: v.id, number: v.versionNumber }}
+          imageUrl={(data.imageUrl ?? data.posterUrl)!}
+          width={info.width ?? 0}
+          height={info.height ?? 0}
+          initial={threads}
+        />
+      ) : reviewMode === "video" && v && threads ? (
         <ReviewWorkspace
           key={v.id}
           orgSlug={org}
@@ -226,12 +272,12 @@ async function Asset({ params, searchParams }: PageProps<"/o/[org]/assets/[asset
             <div className="flex flex-col items-center gap-3 text-center text-muted">
               <KindIcon kind={asset.kind} size={44} className="text-faint" />
               <p className="max-w-sm text-[13px]">
-                {v?.processingStatus === "processing" || v?.processingStatus === "awaiting_upload"
-                  ? "Processing… the preview will appear automatically."
+                {v?.processingStatus === "processing" || v?.processingStatus === "awaiting_upload" || previewPending
+                  ? "Preparing the preview… it will appear automatically."
                   : v?.processingStatus === "failed"
                     ? "This file couldn't be processed. See details on the right."
-                    : asset.kind === "document" || asset.kind === "spreadsheet" || asset.kind === "presentation"
-                      ? "In-browser page, sheet and slide previews are part of the document review module (Phase 3). The original is available for download."
+                    : previewFailed
+                      ? "The preview couldn't be generated. The reason is in the processing history on the right; the original is available for download."
                       : "No preview is available for this file type. The original is available for download."}
               </p>
             </div>
@@ -244,7 +290,7 @@ async function Asset({ params, searchParams }: PageProps<"/o/[org]/assets/[asset
                 : `${info.videoCodec?.toUpperCase()} can’t play in browsers. Preparing a review proxy…`}
             </p>
           )}
-          {(v?.processingStatus === "processing" || v?.processingStatus === "awaiting_upload" || data.proxyStatus === "processing") && <AutoRefresh />}
+          {(v?.processingStatus === "processing" || v?.processingStatus === "awaiting_upload" || previewPending) && <AutoRefresh />}
         </section>
 
         {/* Inspector */}
