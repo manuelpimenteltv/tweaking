@@ -269,6 +269,13 @@ export function UploadProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("beforeunload", onUnload);
   }, [items]);
 
+  // Once everything finished cleanly, get out of the way (the tray overlaps page controls).
+  useEffect(() => {
+    if (!items.length || items.some((i) => i.status !== "done" && i.status !== "canceled")) return;
+    const t = setTimeout(() => setItems((l) => l.filter((i) => i.status !== "done" && i.status !== "canceled")), 6000);
+    return () => clearTimeout(t);
+  }, [items]);
+
   const enqueue = useCallback((files: File[], target: UploadTarget) => {
     const fresh: Item[] = files.map((file) => {
       const check = checkUploadable(file.name, file.size, MAX_BYTES);

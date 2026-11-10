@@ -9,6 +9,9 @@ import { formatBytes, KIND_LABELS } from "@/lib/file-types";
 import { dateTime, duration, frameRate, PROCESSING_STATUS, REVIEW_STATUS, timeAgo } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import { getAsset } from "@/server/modules/assets";
+import { listThreads } from "@/server/modules/review";
+import { ReviewWorkspace } from "@/components/review/review-workspace";
+import { VersionSwitcher } from "@/components/review/version-switcher";
 import { requireOrg } from "@/server/next/session";
 
 export default function AssetPage(props: PageProps<"/o/[org]/assets/[assetId]">) {
@@ -32,84 +35,8 @@ async function Asset({ params, searchParams }: PageProps<"/o/[org]/assets/[asset
   const proc = v ? PROCESSING_STATUS[v.processingStatus] : null;
   const projectHref = `/o/${org}/projects/${project.id}`;
 
-  return (
-    <div className="flex h-full min-h-0 flex-col">
-      <header className="flex flex-wrap items-center gap-3 border-b border-border px-5 py-2.5">
-        <nav aria-label="Location" className="flex min-w-0 flex-1 items-center gap-1 text-[12px] text-muted">
-          <Link href={projectHref} className="truncate hover:text-text">
-            {project.name}
-          </Link>
-          {breadcrumbs.map((b) => (
-            <span key={b.id} className="flex min-w-0 items-center gap-1">
-              <ChevronRight size={12} className="text-faint" aria-hidden />
-              <Link href={`${projectHref}?folder=${b.id}`} className="truncate hover:text-text">
-                {b.name}
-              </Link>
-            </span>
-          ))}
-          <ChevronRight size={12} className="text-faint" aria-hidden />
-          <h1 className="truncate text-[14px] font-semibold text-text">{asset.name}</h1>
-          {v && (
-            <Badge tone={isCurrent ? "accent" : "neutral"} className="ml-1">
-              v{v.versionNumber}
-              {isCurrent ? "" : " (older)"}
-            </Badge>
-          )}
-        </nav>
-        <AssetActions
-          orgSlug={org}
-          projectId={project.id}
-          asset={{ id: asset.id, name: asset.name, kind: asset.kind, folderId: asset.folderId }}
-          versionId={v?.uploadedAt ? v.id : null}
-          can={{
-            download: can("asset.download"),
-            version: can("asset.version"),
-            delete: can("asset.delete"),
-          }}
-        />
-      </header>
-
-      <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
-        {/* Viewer */}
-        <section aria-label="Preview" className="relative grid min-h-[320px] flex-1 place-items-center bg-[#08080a] p-4">
-          {v?.processingStatus === "ready" && data.playbackUrl && asset.kind === "video" ? (
-            <video
-              src={data.playbackUrl}
-              poster={data.posterUrl ?? undefined}
-              controls
-              preload="metadata"
-              className="max-h-full max-w-full"
-              aria-label={`${asset.name} (version ${v.versionNumber})`}
-            />
-          ) : v?.processingStatus === "ready" && data.playbackUrl && asset.kind === "audio" ? (
-            <audio src={data.playbackUrl} controls preload="metadata" className="w-full max-w-xl" />
-          ) : data.posterUrl ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={data.posterUrl} alt={asset.name} className="max-h-full max-w-full object-contain" />
-          ) : (
-            <div className="flex flex-col items-center gap-3 text-center text-muted">
-              <KindIcon kind={asset.kind} size={44} className="text-faint" />
-              <p className="max-w-sm text-[13px]">
-                {v?.processingStatus === "processing" || v?.processingStatus === "awaiting_upload"
-                  ? "Processing… the preview will appear automatically."
-                  : v?.processingStatus === "failed"
-                    ? "This file couldn't be processed. See details on the right."
-                    : asset.kind === "document" || asset.kind === "spreadsheet" || asset.kind === "presentation"
-                      ? "In-browser page, sheet and slide previews are part of the document review module (Phase 3). The original is available for download."
-                      : "No preview is available for this file type. The original is available for download."}
-              </p>
-            </div>
-          )}
-          {v?.processingStatus === "ready" && asset.kind === "video" && !data.playbackUrl && data.posterUrl && (
-            <p className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-md bg-black/70 px-2.5 py-1.5 text-[12px] text-white/80">
-              <Info size={13} /> {info.videoCodec?.toUpperCase()} can&apos;t play in browsers. Review proxies (HLS) are generated in Phase 2.
-            </p>
-          )}
-          {(v?.processingStatus === "processing" || v?.processingStatus === "awaiting_upload") && <AutoRefresh />}
-        </section>
-
-        {/* Inspector */}
-        <aside className="w-full shrink-0 overflow-y-auto border-t border-border bg-surface-1 lg:w-[340px] lg:border-t-0 lg:border-l" aria-label="Details">
+  const details = (
+    <>
           {v && (
             <div className="flex flex-col gap-5 p-4">
               <div className="flex flex-wrap items-center gap-1.5">
@@ -210,8 +137,122 @@ async function Asset({ params, searchParams }: PageProps<"/o/[org]/assets/[asset
               )}
             </div>
           )}
+    </>
+  );
+
+  // Video review: needs the processed version with a frame rate, and a playable source
+  // (review proxies preferred; a verified browser-playable original until they exist).
+  const renditions = data.renditions.length ? data.renditions : data.playbackUrl ? [{ name: "Original", height: info.height ?? 0, url: data.playbackUrl }] : [];
+  const reviewable = asset.kind === "video" && v?.processingStatus === "ready" && !!info.fps && !!info.durationSec && renditions.length > 0;
+  const threads = reviewable && v ? await listThreads(ctx, v.id) : null;
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <header className="flex flex-wrap items-center gap-3 border-b border-border px-5 py-2.5">
+        <nav aria-label="Location" className="flex min-w-0 flex-1 items-center gap-1 text-[12px] text-muted">
+          <Link href={projectHref} className="truncate hover:text-text">
+            {project.name}
+          </Link>
+          {breadcrumbs.map((b) => (
+            <span key={b.id} className="flex min-w-0 items-center gap-1">
+              <ChevronRight size={12} className="text-faint" aria-hidden />
+              <Link href={`${projectHref}?folder=${b.id}`} className="truncate hover:text-text">
+                {b.name}
+              </Link>
+            </span>
+          ))}
+          <ChevronRight size={12} className="text-faint" aria-hidden />
+          <h1 className="truncate text-[14px] font-semibold text-text">{asset.name}</h1>
+          {v && (
+            <VersionSwitcher
+              current={v.versionNumber}
+              latest={versions.find((x) => x.id === asset.currentVersionId)?.versionNumber ?? v.versionNumber}
+              versions={versions.map((x) => ({ number: x.versionNumber, name: x.originalFilename, ready: x.processingStatus === "ready" }))}
+            />
+          )}
+        </nav>
+        <AssetActions
+          orgSlug={org}
+          projectId={project.id}
+          asset={{ id: asset.id, name: asset.name, kind: asset.kind, folderId: asset.folderId }}
+          versionId={v?.uploadedAt ? v.id : null}
+          can={{
+            download: can("asset.download"),
+            version: can("asset.version"),
+            delete: can("asset.delete"),
+          }}
+        />
+      </header>
+
+      {reviewable && v && threads ? (
+        <ReviewWorkspace
+          key={v.id}
+          orgSlug={org}
+          version={{ id: v.id, number: v.versionNumber, isCurrent }}
+          media={{
+            fps: info.fps!,
+            startTimecode: info.startTimecode ?? null,
+            durationSec: info.durationSec!,
+            width: info.width ?? 1920,
+            height: info.height ?? 1080,
+            renditions: renditions.map((r) => ({ name: r.name, url: r.url })),
+            posterUrl: data.posterUrl,
+            sprite: data.sprite,
+          }}
+          initial={threads}
+          canComment={can("comment.create")}
+          currentUserId={ctx.userId}
+          details={details}
+        />
+      ) : (
+      <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+        {/* Viewer */}
+        <section aria-label="Preview" className="relative grid min-h-[320px] flex-1 place-items-center bg-[#08080a] p-4">
+          {v?.processingStatus === "ready" && data.playbackUrl && asset.kind === "video" ? (
+            <video
+              src={data.playbackUrl}
+              poster={data.posterUrl ?? undefined}
+              controls
+              preload="metadata"
+              className="max-h-full max-w-full"
+              aria-label={`${asset.name} (version ${v.versionNumber})`}
+            />
+          ) : v?.processingStatus === "ready" && data.playbackUrl && asset.kind === "audio" ? (
+            <audio src={data.playbackUrl} controls preload="metadata" className="w-full max-w-xl" />
+          ) : data.posterUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={data.posterUrl} alt={asset.name} className="max-h-full max-w-full object-contain" />
+          ) : (
+            <div className="flex flex-col items-center gap-3 text-center text-muted">
+              <KindIcon kind={asset.kind} size={44} className="text-faint" />
+              <p className="max-w-sm text-[13px]">
+                {v?.processingStatus === "processing" || v?.processingStatus === "awaiting_upload"
+                  ? "Processing… the preview will appear automatically."
+                  : v?.processingStatus === "failed"
+                    ? "This file couldn't be processed. See details on the right."
+                    : asset.kind === "document" || asset.kind === "spreadsheet" || asset.kind === "presentation"
+                      ? "In-browser page, sheet and slide previews are part of the document review module (Phase 3). The original is available for download."
+                      : "No preview is available for this file type. The original is available for download."}
+              </p>
+            </div>
+          )}
+          {v?.processingStatus === "ready" && asset.kind === "video" && !data.playbackUrl && data.posterUrl && (
+            <p className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-md bg-black/70 px-2.5 py-1.5 text-[12px] text-white/80">
+              <Info size={13} />{" "}
+              {data.proxyStatus === "failed"
+                ? "The review proxy couldn’t be built. Retry from the processing history."
+                : `${info.videoCodec?.toUpperCase()} can’t play in browsers. Preparing a review proxy…`}
+            </p>
+          )}
+          {(v?.processingStatus === "processing" || v?.processingStatus === "awaiting_upload" || data.proxyStatus === "processing") && <AutoRefresh />}
+        </section>
+
+        {/* Inspector */}
+        <aside className="w-full shrink-0 overflow-y-auto border-t border-border bg-surface-1 lg:w-[340px] lg:border-t-0 lg:border-l" aria-label="Details">
+          {details}
         </aside>
       </div>
+      )}
     </div>
   );
 }

@@ -64,10 +64,13 @@ test("studio onboarding → project → folder → direct upload → processed a
 
   // Asset detail: verified metadata
   await page.getByRole("button", { name: "A001C007_220914.mp4" }).dblclick();
-  await expect(page.getByText("1280 × 720")).toBeVisible();
-  await expect(page.getByText("23.976 fps")).toBeVisible();
-  await expect(page.getByText("10:00:00:00")).toBeVisible();
+  // Video opens in the review workspace; file metadata lives in the panel's Details tab.
   await expect(page.locator("video")).toBeVisible();
+  await expect(page.getByTestId("timecode")).toHaveText("10:00:00:00");
+  const panel = page.getByTestId("review-panel");
+  await panel.getByRole("tab", { name: "Details" }).click();
+  await expect(panel.getByText("1280 × 720")).toBeVisible();
+  await expect(panel.getByText("23.976 fps", { exact: false })).toBeVisible();
   if (shots) await page.screenshot({ path: `${shots}/03-asset.png` });
 
   // Download goes through the authorized, audited endpoint and redirects to a signed URL.

@@ -449,6 +449,12 @@ create index audit_org_idx on audit_logs (organization_id, created_at desc);
 
 ## Phase 2 — Review: comments, annotations, share links
 
+> **Implemented** (`drizzle/0003_review_comments.sql`, `0004_review_security.sql`) for `comment_threads`,
+> `comments`, `comment_mentions` and `annotations`, with these refinements over the proposal below:
+> threads also carry `asset_id` (feedback counts across versions without joins) and explicit `frame` /
+> `end_frame` columns (sortable, indexed) next to the `anchor` JSON (fps and timecode captured at creation).
+> Annotations always belong to a comment. Share links and guests arrive with the client portal (Phase 4).
+
 ```sql
 create table comment_threads (
   id                uuid primary key default gen_random_uuid(),
