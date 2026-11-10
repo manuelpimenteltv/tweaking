@@ -39,6 +39,23 @@ In the comment box: Enter posts, Shift+Enter adds a new line, and `@` opens ment
 - Mentions are only accepted for people who can see the project.
 - Authors can delete their own comments (soft delete, which also removes their drawing).
 
+## Documents, slides, spreadsheets and images (Phase 3)
+
+| Format | How it's shown | Comment anchors |
+|---|---|---|
+| PDF | The original, rendered by PDF.js | Page, or an area of a page (draw to mark it) |
+| Word, RTF, ODT, TXT, Pages | LibreOffice → review PDF (labelled as a rendering) | Page / area |
+| PowerPoint, ODP, Keynote | LibreOffice → review PDF, slide thumbnails, presentation mode | Slide / area |
+| Excel, ODS, Numbers, CSV, TSV | Grid built from the workbook: displayed values, formulas, styles, merges, hidden rows/cols/sheets | Cell (`Sheet!B7`) |
+| JPG, PNG, WEBP, GIF, AVIF | Original at full resolution | Area of the image |
+| TIFF, PSD, HEIC, BMP… | 4096 px WebP review copy | Area of the image |
+
+Document shortcuts: `PageDown`/`PageUp` next/previous page (←/→ in presentation mode), `+`/`-` zoom, `C` comment, `D` draw, `A` show/hide annotations, `F` fullscreen. Spreadsheet: arrows/Enter/Tab move the selected cell, `C` comments on it. Image: `0` fit, `1` 100%, `+`/`-` zoom.
+
+**Fidelity**: Office files are rendered by LibreOffice. Fonts, SmartArt and complex PowerPoint animations can differ slightly from Microsoft Office. Common Office fonts (Calibri, Cambria via metric-compatible Carlito/Caladea) are installed in the worker image. The original is always available for download.
+
+**Spreadsheets**: values are the ones saved in the file (formulas aren't recalculated). Preview limits are 100,000 rows and 702 columns (A–ZZ) per sheet, and 2 million cells per workbook. Anything beyond is stated on screen.
+
 ## Current limits (planned work)
 
 - **Browser color is not a reference monitor.** Proxies are tagged BT.709. HDR sources aren't tone-mapped yet.
@@ -46,4 +63,3 @@ In the comment box: Enter posts, Shift+Enter adds a new line, and `@` opens ment
 - **Teammates' new comments appear within 15 seconds** (polling), not instantly. Live updates arrive with notifications (Phase 4), as do email/in-app alerts for @mentions.
 - **External clients without an account** can't review yet. Secure review links and the client portal are Phase 4.
 - Range comments (in/out) and side-by-side version comparison are not built yet (comparison is Phase 6).
-- Images, PDFs and Office documents get comments and drawings in Phase 3.

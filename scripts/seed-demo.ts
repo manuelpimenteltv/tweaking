@@ -6,10 +6,11 @@
 import "dotenv/config";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
+import ExcelJS from "exceljs";
 import sharp from "sharp";
 import { resolveOrgContext, type AuthContext } from "../src/server/authz/context";
 import { getSystemRole } from "../src/server/authz/roles";
@@ -18,7 +19,8 @@ import { organizationMembers, organizations, users } from "../src/server/db/sche
 import { signUp } from "../src/server/modules/auth";
 import { createFolder } from "../src/server/modules/assets";
 import { createOrganization } from "../src/server/modules/organizations";
-import { createProject, setFavorite, upsertProjectMember } from "../src/server/modules/projects";
+import { createProject, listProjects, setFavorite, upsertProjectMember } from "../src/server/modules/projects";
+import { sofficeBinary } from "../src/server/jobs/documents";
 import { completeUpload, initiateUpload, signUploadParts } from "../src/server/modules/uploads";
 import { createWorkspace, listWorkspaces } from "../src/server/modules/workspaces";
 
@@ -88,11 +90,94 @@ async function upload(ctx: AuthContext, projectId: string, folderId: string | nu
   return init.assetId;
 }
 
+/** Phase 3 samples: script (Word), deck (PowerPoint), budget (Excel), shot list (CSV), plate (TIFF). */
+async function ensurePaperwork(ctx: AuthContext) {
+  const name = "Aurora Motors — Paperwork";
+  const existing = await listProjects(ctx, { q: "Paperwork" });
+  if (existing.some((p) => p.name === name)) return;
+  const workspaces = await listWorkspaces(ctx);
+  const ws = workspaces.find((w) => w.name === "Commercials") ?? workspaces[0];
+  const project = await createProject(ctx, {
+    name,
+    workspaceId: ws.id,
+    clientName: "Aurora Motors",
+    description: "Script, client deck, budget and reference plates for the Horizon spot.",
+  });
+  console.log("Adding document samples…");
+
+  let office = true;
+  const lo = (args: string[]) =>
+    execFileSync(sofficeBinary(), [`-env:UserInstallation=file://${join(dir, "lo-profile")}`, "--headless", ...args], { stdio: "ignore", timeout: 120_000 });
+  try {
+    writeFileSync(
+      join(dir, "Horizon_Script_v4.html"),
+      `<html><body style="font-family: Courier New">
+        <h1>HORIZON — 60s — Script v4</h1>
+        <p><b>1. EXT. COASTAL ROAD — DAWN</b></p><p>The Aurora EV glides along the cliffs as the sun breaks the horizon.</p>
+        <p>VO: Every road starts somewhere.</p>
+        <p><b>2. INT. CAR — CONTINUOUS</b></p><p>MARINA (30s) smiles, eyes on the road.</p>
+        <p style="page-break-before: always"><b>3. EXT. CITY BRIDGE — GOLDEN HOUR</b></p><p>The car crosses the bridge; city lights flicker on.</p>
+        <p>VO: Where it takes you is up to you.</p><p><b>SUPER: AURORA. Go further.</b></p>
+      </body></html>`,
+    );
+    lo(["--convert-to", "docx:MS Word 2007 XML", "--outdir", dir, join(dir, "Horizon_Script_v4.html")]);
+    lo(["--convert-to", "pdf", "--outdir", dir, join(dir, "Horizon_Script_v4.docx")]);
+    lo(["--infilter=impress_pdf_import", "--convert-to", "pptx", "--outdir", dir, join(dir, "Horizon_Script_v4.pdf")]);
+    await upload(ctx, project.id, null, { name: "Horizon_Script_v4.docx", data: readFileSync(join(dir, "Horizon_Script_v4.docx")), mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
+    await upload(ctx, project.id, null, { name: "Horizon_Client_Deck.pptx", data: readFileSync(join(dir, "Horizon_Script_v4.pptx")), mime: "application/vnd.openxmlformats-officedocument.presentationml.presentation" });
+  } catch {
+    office = false;
+    console.warn("LibreOffice not found: skipping the Word and PowerPoint samples (see docs/DEVELOPMENT.md).");
+  }
+
+  const wb = new ExcelJS.Workbook();
+  const sum = wb.addWorksheet("Summary");
+  sum.columns = [{ width: 28 }, { width: 16 }, { width: 12 }];
+  sum.addRow(["Line item", "Cost", "Share"]).font = { bold: true };
+  const lines: [string, number][] = [["Camera & lenses", 18500], ["Crew", 42300], ["Locations & permits", 9800], ["Post (edit, grade, mix)", 26400], ["Music license", 12000]];
+  lines.forEach(([item, cost], i) => {
+    const r = sum.addRow([item, cost, { formula: `B${i + 2}/B${lines.length + 2}`, result: 0 }]);
+    r.getCell(2).numFmt = "$#,##0";
+    r.getCell(3).numFmt = "0.0%";
+  });
+  const total = lines.reduce((a, [, c]) => a + c, 0);
+  const t = sum.addRow(["Total", { formula: `SUM(B2:B${lines.length + 1})`, result: total }]);
+  t.font = { bold: true };
+  t.getCell(2).numFmt = "$#,##0";
+  lines.forEach(([, cost], i) => (sum.getCell(`C${i + 2}`).value = { formula: `B${i + 2}/B${lines.length + 2}`, result: cost / total }));
+  sum.getColumn(4).hidden = true;
+  sum.getCell("D1").value = "Internal margin";
+  const crew = wb.addWorksheet("Crew");
+  crew.addRow(["Role", "Name", "Days", "Rate"]).font = { bold: true };
+  [["Director", "L. Romero", 3, 2500], ["DP", "T. Herrera", 3, 1800], ["Gaffer", "J. Ortiz", 3, 900]].forEach((r) => crew.addRow(r));
+  await upload(ctx, project.id, null, { name: "Horizon_Budget_v3.xlsx", data: Buffer.from(await wb.xlsx.writeBuffer()), mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  await upload(ctx, project.id, null, {
+    name: "Horizon_Shot_List.csv",
+    data: Buffer.from(
+      [
+        "Shot,Scene,Lens,Move,Notes",
+        "1A,1,24mm,Drone,Sunrise over cliffs",
+        '1B,1,85mm,Tracking,"Car profile, low angle"',
+        "2A,2,35mm,Static,Marina smiles",
+        "3A,3,50mm,Crane,Bridge at golden hour",
+      ].join("\n") + "\n",
+    ),
+    mime: "text/csv",
+  });
+  const plate = await still("Horizon_Plate_0042.jpg", 3000, 2000, ["#ff9a5a", "#3b1d60", "#fff1c1"]);
+  await upload(ctx, project.id, null, { name: "Horizon_Plate_0042.tif", data: await sharp(plate.data).tiff().toBuffer(), mime: "image/tiff" });
+  console.log(`Added the "${name}" project${office ? "" : " (without Office samples)"}.`);
+}
+
 async function main() {
   const slug = "northlight-post";
   const [exists] = await systemDb().select().from(organizations).where(eq(organizations.slug, slug));
   if (exists) {
-    console.log("Demo studio already exists — log in with demo@loupe.dev");
+    // Existing demo (e.g. created before Phase 3): only add what's missing.
+    const [owner] = await systemDb().select().from(users).where(eq(users.email, "demo@loupe.dev"));
+    const ctx = owner && (await resolveOrgContext(owner, slug, meta));
+    if (ctx) await ensurePaperwork(ctx);
+    console.log("Demo studio is up to date — log in with demo@loupe.dev /", PASSWORD);
     return;
   }
   const owner = await user("Marina Ortega", "demo@loupe.dev");
@@ -173,6 +258,7 @@ async function main() {
 
   await createProject(ctx, { name: "Brand Guidelines Refresh", workspaceId: general.id, clientName: "Northlight (internal)", status: "completed" });
 
+  await ensurePaperwork(ctx);
   console.log("Demo studio ready. Run the worker to process media. Login: demo@loupe.dev /", PASSWORD);
 }
 

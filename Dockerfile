@@ -21,12 +21,15 @@ USER loupe
 EXPOSE 3000
 CMD ["pnpm", "start"]
 
-# Worker: processes untrusted media. Runs as an unprivileged user with FFmpeg.
+# Worker: processes untrusted media and documents. Runs as an unprivileged user with
+# FFmpeg (video), LibreOffice (Office → PDF) and Poppler (page count, thumbnails).
 # Deploy with no inbound network and egress limited to PostgreSQL + object storage.
 FROM node:22-bookworm-slim AS worker
 WORKDIR /app
 ENV NODE_ENV=production
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg ca-certificates \
+    libreoffice-writer libreoffice-calc libreoffice-impress poppler-utils \
+    fonts-liberation fonts-dejavu-core fonts-noto-core fonts-crosextra-carlito fonts-crosextra-caladea \
   && rm -rf /var/lib/apt/lists/* && corepack enable && useradd --system --uid 10001 loupe
 COPY --from=deps /app/node_modules ./node_modules
 COPY package.json tsconfig.json ./

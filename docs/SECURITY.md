@@ -15,6 +15,7 @@
 | Storage | Private bucket. Credentials stay server-side. Short-lived presigned URLs issued only after authorization. Downloads are audited and use `attachment` disposition with sanitized RFC 6266 filenames | `src/server/storage/s3.ts`, `modules/assets.ts` |
 | Upload integrity | Per-part SHA-256 bound into the presigned signature (storage rejects altered bytes). Size verified on completion. Whole-file SHA-256 recomputed by the worker | `modules/uploads.ts`, `jobs/ingest.ts` |
 | File validation | Extension denylist (executables, scripts, HTML), declared-MIME plausibility, size limits, magic-byte verification against the extension's family | `src/lib/file-types.ts`, `jobs/ingest.ts` |
+| Untrusted documents | LibreOffice runs headless with a throwaway profile per conversion and a timeout. Macros don't run in headless conversion. The original is copied to a scratch directory under a fixed name, so user filenames never reach a command line. PDFs render in the browser with PDF.js, with links, forms and scripting disabled. Spreadsheets are parsed into data (never executed), and formulas are shown as text | `src/server/jobs/documents.ts`, `sheets.ts`, `components/review/document-viewer.tsx` |
 | Untrusted media | Worker is a separate process/image running as a non-root user. FFmpeg invoked with argument arrays (no shell), timeouts and output caps. libvips pixel limits | `src/server/media/process.ts`, `Dockerfile` |
 | Audit | Append-only `audit_logs` (trigger rejects UPDATE/DELETE): logins, failed logins, role changes, invitations, downloads, deletions, retries | `modules/audit.ts` |
 | Headers | CSP (storage origins allow-listed, `frame-ancestors 'none'`, `object-src 'none'`), HSTS, nosniff, Referrer-Policy, Permissions-Policy | `next.config.ts` |
@@ -22,6 +23,8 @@
 
 ## Known gaps / planned
 
+- **LibreOffice can fetch remote resources referenced by a document** (e.g. linked images). Run workers with egress limited to PostgreSQL and object storage (see DEPLOYMENT.md).
+- **CSP allows `'wasm-unsafe-eval'`** so PDF.js can compile its WebAssembly image decoders. It does not permit JavaScript `eval`.
 - **CSP uses `'unsafe-inline'` for scripts** (Next.js bootstrap). Planned: a nonce-based CSP via `proxy.ts` (Phase 6).
 - **Client IP** comes from the first `X-Forwarded-For` hop. Deploy behind a proxy that overwrites the header, or rate limits can be evaded by spoofing it.
 - **Malware scanning** (ClamAV stage) is designed but not implemented (Phase 6). Media files are never executed or served inline except verified audio/video.

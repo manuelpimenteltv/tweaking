@@ -21,6 +21,9 @@ All server configuration is read from environment variables and validated at sta
 | `UPLOAD_SESSION_TTL_HOURS` | no | `72` | Unfinished multipart uploads are aborted after this |
 | `SIGNED_URL_TTL_SECONDS` | no | `3600` | Preview/playback URL lifetime (downloads use 300 s) |
 | `FFPROBE_PATH` / `FFMPEG_PATH` | no | on `PATH` | Worker media tools |
+| `SOFFICE_PATH` | no | `soffice` (or the macOS app bundle) | LibreOffice binary for Office → PDF/XLSX |
+| `PDFINFO_PATH` / `PDFTOPPM_PATH` | no | on `PATH` | Poppler tools (page count, cover thumbnails) |
+| `DOCUMENT_PREVIEW_MAX_BYTES` | no | 512 MiB | Larger documents/spreadsheets are download-only |
 | `WORKER_CONCURRENCY` | no | `2` | Jobs per worker process |
 | `WORKER_JOB_TIMEOUT_SECONDS` | no | `1800` | Hard per-job timeout (child processes are killed) |
 | `CSP_STORAGE_ORIGINS` | no | derived | Space-separated origins allowed in the CSP for storage/CDN |

@@ -1,4 +1,4 @@
-import { createWriteStream } from "node:fs";
+import { createWriteStream, existsSync } from "node:fs";
 import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, extname, join } from "node:path";
@@ -64,17 +64,24 @@ async function download(v: Loaded, dir: string): Promise<string> {
   return path;
 }
 
+/** LibreOffice binary: SOFFICE_PATH, else the macOS app bundle when present, else `soffice` on PATH. */
+export function sofficeBinary(): string {
+  const configured = env().SOFFICE_PATH;
+  if (configured !== "soffice") return configured;
+  const mac = "/Applications/LibreOffice.app/Contents/MacOS/soffice";
+  return process.platform === "darwin" && existsSync(mac) ? mac : "soffice";
+}
+
 /**
  * Converts with LibreOffice in headless mode. Each conversion gets its own
  * throwaway profile (parallel jobs can't share one) and runs under the worker's
  * timeout. Macros are not executed in headless conversion.
  */
 export async function convertWithLibreOffice(input: string, outDir: string, format: "pdf" | "xlsx", signal: AbortSignal): Promise<string> {
-  const e = env();
   const profile = await mkdtemp(join(tmpdir(), "loupe-lo-profile-"));
   try {
     await run(
-      e.SOFFICE_PATH,
+      sofficeBinary(),
       [
         `-env:UserInstallation=file://${profile}`,
         "--headless", "--invisible", "--nodefault", "--nolockcheck", "--nologo", "--norestore",

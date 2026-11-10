@@ -11,7 +11,8 @@ Review, collaboration and asset management for post-production studios, agencies
 | 0 | Architecture, schema, roadmap, risks | ✅ [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/DATABASE.md](docs/DATABASE.md) |
 | 1 | Core platform | ✅ Implemented and tested (details below) |
 | 2 | Video review | ✅ Implemented and tested (details below, and [docs/REVIEW.md](docs/REVIEW.md)) |
-| 3–6 | Document review, collaboration and approvals, hybrid storage, professionalization | Planned ([roadmap](docs/ARCHITECTURE.md#7-phased-development-roadmap)) |
+| 3 | Document, spreadsheet, presentation and image review | ✅ Implemented and tested (details below) |
+| 4–6 | Collaboration and approvals, hybrid storage, professionalization | Planned ([roadmap](docs/ARCHITECTURE.md#7-phased-development-roadmap)) |
 
 ### Phase 1: what works today
 
@@ -35,9 +36,17 @@ Review, collaboration and asset management for post-production studios, agencies
 - **Bound to versions**: every comment and drawing belongs to the version it was made on. A new version starts clean, and the panel lists open feedback left on other versions. Nothing is moved automatically.
 - **Visual annotations**: freehand, arrows, lines, rectangles, circles/ellipses, text and highlighter, with 6 colors and 3 stroke widths, undo and clear. Stored as vectors in their own table (never burned into the video), shown on their frame, with **show/hide**.
 
+### Phase 3: document, spreadsheet, presentation and image review
+
+Every format uses the same comments, replies, mentions, resolve/reopen, filters, versions and drawing tools as video. The panel is the same two-panel layout.
+
+- **PDF, Word (DOC/DOCX/RTF/ODT/TXT) and PowerPoint (PPT/PPTX/ODP/Keynote)**: the worker renders Office files to a review PDF with LibreOffice. PDFs are shown as-is. The viewer (PDF.js) offers page navigation, zoom (fit width, fit page, 50–300%), fullscreen, page/slide **thumbnails** with comment counts, **text selection** and **find**, plus a **presentation mode** for slides. Comments attach to a **page/slide**, or to an **area** of it when you draw. The original file is never changed, and Office renderings are labelled as such.
+- **Excel (XLSX/XLSM/XLS/ODS/Numbers) and CSV/TSV**: sheet tabs (hidden sheets marked), a fast grid that only draws visible cells and loads rows in blocks, values **as Excel displays them** (currency, %, dates…), the **formula** of the selected cell in a formula bar, merged cells, bold/colors/alignment, **hidden rows and columns** (toggle to show them), zoom, and **comments on a cell** (`Summary!B4`) marked in the grid. Formulas, sheets and values are never dropped silently: any size limit is stated on screen.
+- **Images (JPG, PNG, WEBP, GIF, AVIF, TIFF, PSD…)**: full resolution when the browser supports the format, otherwise a 4096 px review copy. Fit / 100% / zoom (also Ctrl/⌘ + wheel), drag to pan, and **area comments** drawn with any tool.
+
 ### Not yet built (explicitly)
 
-Document, sheet and slide viewers, plus comments on images (Phase 3); approval workflows, client portal and review links for external clients, and notifications, including alerts for @mentions (Phase 4); Google Drive, Dropbox and customer-S3 connectors (Phase 5; the adapter interfaces exist in `src/server/storage/types.ts`). **Email delivery** is an integration boundary (`src/server/mail/mailer.ts`): invitations are shown as copyable links, and nothing is emailed yet.
+Approval workflows, client portal and review links for external clients, and notifications, including alerts for @mentions (Phase 4); Google Drive, Dropbox and customer-S3 connectors (Phase 5; the adapter interfaces exist in `src/server/storage/types.ts`). **Email delivery** is an integration boundary (`src/server/mail/mailer.ts`): invitations are shown as copyable links, and nothing is emailed yet.
 
 ## Quick start
 
@@ -56,7 +65,8 @@ Updating an existing installation to a newer version:
 
 ```bash
 pnpm install && pnpm db:migrate
-pnpm media:backfill           # builds review proxies for videos uploaded before Phase 2
+pnpm media:backfill           # builds review proxies/previews for files uploaded before Phases 2–3
+pnpm seed:demo                # optional: adds the Phase 3 sample project to the demo studio
 ```
 
 ## Documentation

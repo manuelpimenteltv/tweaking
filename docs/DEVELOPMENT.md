@@ -5,6 +5,10 @@
 - Node.js 22+, pnpm 10+
 - PostgreSQL 16+ and an S3-compatible store: `docker compose up -d` starts both
 - FFmpeg/ffprobe on `PATH` (needed by the worker and the integration tests)
+- **LibreOffice** and **Poppler** for document previews (Phase 3):
+  - macOS: `brew install --cask libreoffice` and `brew install poppler`. The worker finds LibreOffice inside `/Applications` automatically.
+  - Debian/Ubuntu: `apt-get install libreoffice-writer libreoffice-calc libreoffice-impress poppler-utils`
+  - Without them, Office files still upload and download. Their preview shows a clear "LibreOffice is not installed on the worker" message.
 
 Without Docker, install PostgreSQL locally, run `psql -U postgres -f scripts/db-bootstrap.sql`,
 and start MinIO with `scripts/dev-minio.sh` (it expects a MinIO binary at `.dev/minio`, or set `MINIO_BIN`).
@@ -16,7 +20,7 @@ cp .env.example .env                 # defaults match docker-compose.yml
 pnpm install
 pnpm db:migrate                      # migrations + system roles + providers
 pnpm storage:setup                   # bucket + CORS
-pnpm dev                             # http://localhost:3000
+pnpm dev                             # http://localhost:3000 (also copies PDF.js assets to public/pdfjs)
 pnpm worker                          # second terminal
 ```
 
