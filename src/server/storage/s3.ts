@@ -13,6 +13,8 @@ import {
   type CompletedPart,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { createReadStream } from "node:fs";
+import { stat } from "node:fs/promises";
 import type { Readable } from "node:stream";
 import { AppError } from "../errors";
 import type { ObjectHead, ObjectStorageProvider, SignedRequest, StorageCapabilities, UploadedPart } from "./types";
@@ -240,6 +242,24 @@ export class S3StorageProvider implements ObjectStorageProvider {
         }),
       ),
     );
+  }
+
+  async putFile(key: string, path: string, opts: { contentType: string; cacheControl?: string }) {
+    const { size } = await stat(path);
+    await this.wrap(
+      "putObject",
+      this.client.send(
+        new PutObjectCommand({
+          Bucket: this.cfg.bucket,
+          Key: key,
+          Body: createReadStream(path),
+          ContentLength: size,
+          ContentType: opts.contentType,
+          CacheControl: opts.cacheControl,
+        }),
+      ),
+    );
+    return size;
   }
 
   async delete(key: string) {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { checkUploadable, declaredMimeIsPlausible, extensionOf, kindForExtension } from "@/lib/file-types";
 import { contentMatchesKind } from "@/server/jobs/ingest";
+import { renditionHeights, spriteLayout } from "@/server/jobs/proxy";
 import { containerName, isVariableFrameRate, parseRational, toMediaInfo } from "@/server/media/probe";
 import { PROJECT_ROLE_CEILING, SYSTEM_ORG_ROLES, SYSTEM_PROJECT_ROLES } from "@/server/authz/permissions";
 import { safeKeySegment } from "@/server/storage/registry";
@@ -30,6 +31,21 @@ describe("media probing", () => {
       streams: [{ codec_type: "video", codec_name: "h264", pix_fmt: "yuv420p", r_frame_rate: "24/1", avg_frame_rate: "24/1" }, { codec_type: "audio", codec_name: "aac" }],
     });
     expect(h264.browserPlayable).toBe(true);
+  });
+});
+
+describe("review proxies", () => {
+  it("never upscales and keeps a 1080p/540p ladder", () => {
+    expect(renditionHeights(2160)).toEqual([1080, 540]);
+    expect(renditionHeights(1080)).toEqual([1080, 540]);
+    expect(renditionHeights(720)).toEqual([720, 540]);
+    expect(renditionHeights(360)).toEqual([360]);
+    expect(renditionHeights(481)).toEqual([480]);
+  });
+
+  it("keeps timeline sprites at or under 100 thumbnails", () => {
+    expect(spriteLayout(6)).toEqual({ interval: 1, count: 6, columns: 6, rows: 1 });
+    expect(spriteLayout(3600)).toMatchObject({ interval: 36, count: 100, columns: 10, rows: 10 });
   });
 });
 

@@ -215,6 +215,16 @@ describe("uploads", () => {
     });
     expect(asset.posterUrl).toBeTruthy();
     expect(asset.playbackUrl).toBeTruthy();
+
+    // Review proxy: never upscaled, constant frame rate at the source's exact rate, plus a timeline sprite.
+    expect(asset.proxyStatus).toBe("ready");
+    expect(asset.renditions.map((r) => r.name)).toEqual(["360p"]);
+    expect(asset.sprite).toMatchObject({ interval: 1, columns: 2, tileWidth: 160, tileHeight: 90 });
+    const probe = JSON.parse(
+      execFileSync("ffprobe", ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=r_frame_rate,avg_frame_rate,height,pix_fmt", "-of", "json", asset.renditions[0].url]).toString(),
+    ).streams[0];
+    expect(probe).toMatchObject({ r_frame_rate: "24000/1001", avg_frame_rate: "24000/1001", height: 360, pix_fmt: "yuv420p" });
+    expect(asset.jobs.map((j) => `${j.type}:${j.status}`)).toEqual(expect.arrayContaining(["ingest:succeeded", "proxy:succeeded"]));
   });
 
   it("uploads a new version that becomes current, and cancels cleanly", async () => {

@@ -8,7 +8,7 @@ import { withScope } from "../db/tenant";
 import { env } from "../env";
 import { extractFrame, ffprobe } from "../media/probe";
 import { keys, platformStorage, storageForConnection } from "../storage/registry";
-import type { ClaimedJob } from "./queue";
+import { enqueueJob, type ClaimedJob } from "./queue";
 
 /** Thrown for failures that retrying cannot fix (bad content, unsupported input). */
 export class PermanentJobError extends Error {
@@ -239,6 +239,10 @@ export async function runIngest(job: ClaimedJob, signal: AbortSignal): Promise<v
         processingError: null,
       })
       .where(eq(assetVersions.id, v.versionId));
+    // Videos get browser review proxies + timeline sprites in a follow-up job (same transaction).
+    if (v.kind === "video" && mediaInfo.width) {
+      await enqueueJob(tx, { orgId: v.orgId, assetVersionId: v.versionId, type: "proxy" });
+    }
   });
 }
 

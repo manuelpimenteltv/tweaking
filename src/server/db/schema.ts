@@ -540,3 +540,108 @@ export const auditLogs = pgTable(
   },
   (t) => [index("audit_org_idx").on(t.organizationId, t.createdAt.desc())],
 );
+
+// ── Review (Phase 2): comments, threads, mentions, annotations ──────────────
+export const anchorType = pgEnum("anchor_type", ["none", "frame", "frame_range", "page", "slide", "sheet_cell", "region"]);
+export const threadStatus = pgEnum("thread_status", ["open", "resolved"]);
+
+const tsvector = customType<{ data: string }>({ dataType: () => "tsvector" });
+
+/**
+ * A feedback thread is bound to exactly one asset version. It is never moved
+ * to another version automatically (frame references can't be mapped reliably).
+ */
+export const commentThreads = pgTable(
+  "comment_threads",
+  {
+    id: id(),
+    organizationId: orgRef(),
+    assetId: uuid("asset_id")
+      .notNull()
+      .references(() => assets.id, { onDelete: "cascade" }),
+    assetVersionId: uuid("asset_version_id")
+      .notNull()
+      .references(() => assetVersions.id, { onDelete: "cascade" }),
+    anchorType: anchorType("anchor_type").notNull().default("none"),
+    /** Frame number in the version's (proxy) timeline: 0-based, at fps num/den. */
+    frame: integer("frame"),
+    endFrame: integer("end_frame"),
+    /** Anchor context captured at creation: {fpsNum, fpsDen, timecode, region…}. */
+    anchor: jsonb("anchor").$type<ThreadAnchor>().notNull().default({}),
+    status: threadStatus("status").notNull().default("open"),
+    resolvedBy: uuid("resolved_by").references(() => users.id),
+    resolvedAt: ts("resolved_at"),
+    createdBy: uuid("created_by").references(() => users.id),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    index("threads_version_idx").on(t.assetVersionId, t.frame),
+    index("threads_asset_idx").on(t.organizationId, t.assetId),
+  ],
+);
+
+export type ThreadAnchor = { fpsNum?: number; fpsDen?: number; timecode?: string; seconds?: number };
+
+export const comments = pgTable(
+  "comments",
+  {
+    id: id(),
+    organizationId: orgRef(),
+    threadId: uuid("thread_id")
+      .notNull()
+      .references(() => commentThreads.id, { onDelete: "cascade" }),
+    authorUserId: uuid("author_user_id").references(() => users.id),
+    body: text("body").notNull(),
+    bodyTsv: tsvector("body_tsv").generatedAlwaysAs(sql`to_tsvector('simple', body)`),
+    editedAt: ts("edited_at"),
+    deletedAt: ts("deleted_at"),
+    createdAt: createdAt(),
+  },
+  (t) => [index("comments_thread_idx").on(t.threadId, t.createdAt), index("comments_fts_idx").using("gin", t.bodyTsv)],
+);
+
+export const commentMentions = pgTable(
+  "comment_mentions",
+  {
+    organizationId: orgRef(),
+    commentId: uuid("comment_id")
+      .notNull()
+      .references(() => comments.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    createdAt: createdAt(),
+  },
+  (t) => [primaryKey({ columns: [t.commentId, t.userId] }), index("mentions_user_idx").on(t.userId, t.createdAt.desc())],
+);
+
+/** Vector shapes in normalized (0–1) coordinates of the picture. Stored apart from the media. */
+export const annotations = pgTable(
+  "annotations",
+  {
+    id: id(),
+    organizationId: orgRef(),
+    assetVersionId: uuid("asset_version_id")
+      .notNull()
+      .references(() => assetVersions.id, { onDelete: "cascade" }),
+    commentId: uuid("comment_id")
+      .notNull()
+      .references(() => comments.id, { onDelete: "cascade" }),
+    frame: integer("frame"),
+    shapes: jsonb("shapes").$type<AnnotationShape[]>().notNull(),
+    createdBy: uuid("created_by").references(() => users.id),
+    createdAt: createdAt(),
+  },
+  (t) => [index("annotations_version_idx").on(t.assetVersionId, t.frame), index("annotations_comment_idx").on(t.commentId)],
+);
+
+export type AnnotationTool = "freehand" | "arrow" | "line" | "rect" | "ellipse" | "text" | "highlight";
+export type AnnotationShape = {
+  tool: AnnotationTool;
+  /** freehand/highlight: polyline; arrow/line: [start, end]; rect/ellipse: [corner, opposite corner]; text: [anchor]. */
+  points: [number, number][];
+  color: string;
+  width: number;
+  text?: string;
+};

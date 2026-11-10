@@ -17,7 +17,7 @@ import {
 import { withTenant } from "../db/tenant";
 import { conflict, invalid, isUniqueViolation, notFound } from "../errors";
 import { parse } from "../lib/validate";
-import { storageForConnection } from "../storage/registry";
+import { platformStorage, storageForConnection } from "../storage/registry";
 import { auditFromCtx, recordAudit } from "./audit";
 import { recordActivity } from "./activity";
 import { previewKeySql, signPreview } from "./previews";
@@ -382,10 +382,24 @@ export async function getAsset(ctx: AuthContext, assetId: string, versionNumber?
           .orderBy(desc(processingJobs.createdAt))
           .limit(10)
       : [];
+    const media = selected
+      ? await tx
+          .select({
+            kind: previews.kind,
+            rendition: previews.rendition,
+            width: previews.width,
+            height: previews.height,
+            metadata: previews.metadata,
+            objectKey: storageLocations.objectKey,
+          })
+          .from(previews)
+          .innerJoin(storageLocations, eq(storageLocations.id, previews.storageLocationId))
+          .where(and(eq(previews.assetVersionId, selected.id), inArray(previews.kind, ["proxy", "sprite"])))
+      : [];
     const previewCount = selected
       ? (await tx.select({ n: sql<number>`count(*)::int` }).from(previews).where(eq(previews.assetVersionId, selected.id)))[0].n
       : 0;
-    return { asset, project: access.project, permissions: [...access.permissions], breadcrumbs, versions, selected, jobs, previewCount };
+    return { asset, project: access.project, permissions: [...access.permissions], breadcrumbs, versions, selected, jobs, previewCount, media };
   });
 
   const sel = data.selected;
@@ -402,8 +416,32 @@ export async function getAsset(ctx: AuthContext, assetId: string, versionNumber?
       });
     }
   }
+  // Review proxies (constant frame rate, short GOP) are preferred for playback; largest first.
+  const storage = platformStorage();
+  const renditions = await Promise.all(
+    data.media
+      .filter((m) => m.kind === "proxy" && m.objectKey)
+      .sort((a, b) => (b.height ?? 0) - (a.height ?? 0))
+      .map(async (m) => ({
+        name: m.rendition ?? `${m.height}p`,
+        height: m.height ?? 0,
+        url: await storage.presignDownload(m.objectKey!, { disposition: "inline", contentType: "video/mp4" }),
+      })),
+  );
+  const spriteRow = data.media.find((m) => m.kind === "sprite" && m.objectKey);
+  const sprite = spriteRow
+    ? {
+        url: await storage.presignDownload(spriteRow.objectKey!, { disposition: "inline", contentType: "image/jpeg" }),
+        ...(spriteRow.metadata as { interval: number; count: number; columns: number; rows: number; tileWidth: number; tileHeight: number }),
+      }
+    : null;
+  const proxyJob = data.jobs.find((j) => j.type === "proxy");
+
   return {
     ...data,
+    renditions,
+    sprite,
+    proxyStatus: renditions.length ? ("ready" as const) : proxyJob ? (proxyJob.status === "failed" ? ("failed" as const) : ("processing" as const)) : ("none" as const),
     thumbnailUrl: await signPreview(sel?.thumbKey),
     posterUrl: await signPreview(sel?.posterKey),
     playbackUrl,
