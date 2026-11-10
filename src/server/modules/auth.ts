@@ -56,5 +56,5 @@ export async function signIn(input: unknown, meta: RequestMeta) {
   }
   await db.update(users).set({ lastLoginAt: sql`now()` }).where(eq(users.id, user.id));
   await recordAudit(db, { orgId: null, actorUserId: user.id, action: "auth.login", targetType: "user", targetId: user.id, request: meta });
-  return createSession(user.id, meta);
+  return { userId: user.id, ...(await createSession(user.id, meta)) };
 }

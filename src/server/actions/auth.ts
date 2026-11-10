@@ -1,5 +1,6 @@
 "use server";
 
+import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { signIn, signUp } from "../modules/auth";
 import { createOrganization, listMyOrganizations } from "../modules/organizations";
@@ -16,11 +17,20 @@ function safeNext(value: FormDataEntryValue | null): string | null {
 
 export async function signInAction(_prev: ActionResult | null, form: FormData): Promise<ActionResult> {
   const res = await attempt(async () => {
-    const { token, expiresAt } = await signIn({ email: form.get("email"), password: form.get("password") }, await getRequestMeta());
+    const { token, expiresAt, userId } = await signIn({ email: form.get("email"), password: form.get("password") }, await getRequestMeta());
     await setSessionCookie(token, expiresAt);
+    return userId;
   });
   if (!res.ok) return res;
-  redirect(safeNext(form.get("next")) ?? "/");
+  // Resolve the landing page here: chaining through "/" leaves the client router showing the wrong URL.
+  redirect(safeNext(form.get("next")) ?? (await homeFor(res.data)));
+}
+
+async function homeFor(userId: string) {
+  const orgs = await listMyOrganizations(userId);
+  const last = (await cookies()).get("loupe_last_org")?.value;
+  const target = orgs.find((o) => o.slug === last) ?? orgs[0];
+  return target ? `/o/${target.slug}` : "/onboarding";
 }
 
 export async function signUpAction(_prev: ActionResult | null, form: FormData): Promise<ActionResult> {

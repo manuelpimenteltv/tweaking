@@ -39,7 +39,7 @@ export function ProjectCard({ p, orgSlug }: { p: ProjectCardData; orgSlug: strin
           <div className="flex items-center gap-1.5 text-[12px] text-faint">
             <span className="truncate">{p.clientName || p.workspaceName}</span>
             <span aria-hidden>·</span>
-            <span className="shrink-0 tabular">{p.assetCount} assets</span>
+            <span className="shrink-0 tabular">{p.assetCount} asset{p.assetCount === 1 ? "" : "s"}</span>
             <span aria-hidden>·</span>
             <span className="shrink-0">{timeAgo(p.updatedAt)}</span>
           </div>
